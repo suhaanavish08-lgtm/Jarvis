@@ -3,6 +3,7 @@ faster-whisper
 sounddevice
 scipy
 numpy
-pyttsx3
 psutil
 av<19
+kokoro-onnx
+soundfile

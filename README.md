@@ -1,13 +1,13 @@
 # Jarvis: Local AI Desktop Voice Assistant
 
-An ultra-responsive local voice assistant running offline with local LLM reasoning, speech-to-text, text-to-speech, and desktop control capabilities.
+An ultra-responsive local voice assistant running offline with local LLM reasoning, speech-to-text, neural text-to-speech, and desktop control capabilities.
 
 ## Architecture
 
 - **LLM Reasoning**: [Ollama](https://ollama.com/) with customized `jarvis` model (based on `llama3.2` with temperature 0.2).
 - **Speech-to-Text (STT)**: `faster-whisper` and `sounddevice` for fast local audio transcription.
-- **Text-to-Speech (TTS)**: `pyttsx3` for low-latency offline voice output.
-- **System Control**: `src/tools/system_ctrl.py` monitoring CPU, RAM, disk, battery, and launching applications (Antigravity IDE, Notepad, Calculator, etc.).
+- **Neural Text-to-Speech (TTS)**: `kokoro-onnx` with Kokoro-82M model and `am_michael` / `am_onyx` voice embeddings (Orbit-like deep, energetic male AI voice) played via `sounddevice`.
+- **System Control**: `src/tools/system_ctrl.py` monitoring CPU, RAM, disk, battery, and launching applications (Antigravity IDE, Spotify, Notepad, Calculator, etc.).
 
 ## Directory Structure
 
@@ -17,14 +17,14 @@ Jarvis/
 ├── Modelfile
 ├── requirements.txt
 ├── README.md
-├── models/             # Local model caches
+├── models/             # Kokoro-82M ONNX model, voice JSONs & weights
 ├── memory/             # Local memory / conversation logs
 └── src/
     ├── __init__.py
-    ├── main.py         # Voice loop & CLI orchestrator
+    ├── main.py         # Voice loop & CLI orchestrator with Kokoro TTS
     └── tools/
         ├── __init__.py
-        └── system_ctrl.py  # System stats & app launcher
+        └── system_ctrl.py  # System stats & app launcher (Spotify, etc.)
 ```
 
 ## Quick Start
@@ -50,17 +50,17 @@ ollama create jarvis -f Modelfile
 
 Voice loop mode:
 ```bash
-python -m src.main
+python src/main.py
 ```
 
 CLI test mode (text input):
 ```bash
-python -m src.main --cli
+python src/main.py --cli
 ```
 
 Check system stats directly:
 ```bash
-python -m src.main --stats
+python src/main.py --stats
 ```
 
 ## Built-in Commands & Tools
@@ -68,6 +68,7 @@ python -m src.main --stats
 - **System Diagnostics**: "How is the system?", "CPU usage", "System status"
 - **App Launching**:
   - "Open Antigravity" / "Launch Antigravity"
+  - "Open Spotify"
   - "Open Notepad"
   - "Launch Calculator"
-- **General Queries**: Handled via the local `jarvis` Llama 3.2 model with concise voice-oriented responses.
+- **General Queries**: Handled via the local `jarvis` Llama 3.2 model with concise voice-oriented responses spoken through Kokoro neural TTS.

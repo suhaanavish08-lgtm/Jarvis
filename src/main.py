@@ -1,22 +1,20 @@
-"""Jarvis: Local AI Voice Assistant."""
+"""Jarvis: Local AI Voice Assistant with Kokoro TTS (Orbit voice)."""
 
 import argparse
 import io
+import json
 import os
 import sys
 import tempfile
 import time
+import urllib.request
 from typing import Optional
 
+from kokoro_onnx import Kokoro
 import numpy as np
-import pyttsx3
 import scipy.io.wavfile as wavfile
 import sounddevice as sd
-
-# Initialize pyttsx3 globally
-tts_engine = pyttsx3.init()
-tts_engine.setProperty("rate", 180)
-tts_engine.setProperty("volume", 0.9)
+import soundfile as sf
 
 try:
     import ollama
@@ -30,21 +28,80 @@ except ImportError:
 
 from tools.system_ctrl import handle_system_command, get_system_stats, launch_app, open_application
 
+# Configuration for Kokoro TTS
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+KOKORO_MODEL_FILE = "kokoro-v1.0.onnx"
+KOKORO_VOICES_BIN = "voices-v1.0.bin"
+CHOSEN_VOICE = "am_michael"  # Deep, energetic male AI voice (Orbit-like)
 
-def speak(text: str):
-    """Print response to the terminal and speak out loud using pyttsx3."""
+KOKORO_MODEL_URL = f"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/{KOKORO_MODEL_FILE}"
+KOKORO_VOICES_BIN_URL = f"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/{KOKORO_VOICES_BIN}"
+
+
+def ensure_kokoro_models(model_dir: str = MODELS_DIR, voice_name: str = CHOSEN_VOICE) -> tuple[str, str]:
+    """Ensure Kokoro ONNX model and chosen voice JSON/embeddings are present in models/."""
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, KOKORO_MODEL_FILE)
+    voices_bin_path = os.path.join(model_dir, KOKORO_VOICES_BIN)
+    voice_json_path = os.path.join(model_dir, f"{voice_name}.json")
+
+    # 1. Download Kokoro-82M ONNX model if missing
+    if not os.path.exists(model_path):
+        print(f"[Jarvis] Downloading Kokoro-82M ONNX model ({KOKORO_MODEL_FILE})...")
+        urllib.request.urlretrieve(KOKORO_MODEL_URL, model_path)
+        print("[Jarvis] Kokoro-82M ONNX model downloaded.")
+
+    # 2. Download voices binary if missing
+    if not os.path.exists(voices_bin_path):
+        print(f"[Jarvis] Downloading voices file ({KOKORO_VOICES_BIN})...")
+        urllib.request.urlretrieve(KOKORO_VOICES_BIN_URL, voices_bin_path)
+        print("[Jarvis] Voices binary downloaded.")
+
+    # 3. Create/verify chosen voice JSON in models folder
+    if not os.path.exists(voice_json_path):
+        print(f"[Jarvis] Generating voice JSON for {voice_name} in models/...")
+        try:
+            voices_data = np.load(voices_bin_path)
+            if voice_name in voices_data:
+                voice_dict = {voice_name: voices_data[voice_name].tolist()}
+                with open(voice_json_path, "w", encoding="utf-8") as f:
+                    json.dump(voice_dict, f)
+                print(f"[Jarvis] Saved {voice_name}.json to models/.")
+        except Exception as exc:
+            print(f"[Warning] Failed to generate {voice_name}.json: {exc}")
+
+    return model_path, voices_bin_path
+
+
+# Initialize Kokoro globally
+_model_path, _voices_path = ensure_kokoro_models()
+kokoro = Kokoro(model_path=_model_path, voices_path=_voices_path)
+
+
+def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.0):
+    """Print response to the terminal and speak out loud using Kokoro TTS & sounddevice."""
     print(f"\n[Jarvis]: {text}\n")
+    if not text.strip():
+        return
     try:
-        tts_engine.say(text)
-        tts_engine.runAndWait()
+        samples, sample_rate = kokoro.create(
+            text=text,
+            voice=voice,
+            speed=speed,
+            lang="en-us"
+        )
+        sd.play(samples, sample_rate)
+        sd.wait()
     except Exception as e:
-        print(f"[TTS Error]: {e}")
+        print(f"[Kokoro TTS Error]: {e}")
 
 
 class VoiceAssistant:
-    def __init__(self, model_name: str = "jarvis", whisper_size: str = "tiny.en"):
+    def __init__(self, model_name: str = "jarvis", whisper_size: str = "tiny.en", voice: str = CHOSEN_VOICE):
         self.model_name = model_name
         self.whisper_size = whisper_size
+        self.voice = voice
         self.conversation_history = []
         self._whisper_model = None
 
@@ -62,8 +119,8 @@ class VoiceAssistant:
         return self._whisper_model
 
     def speak(self, text: str):
-        """Forward to global speak function."""
-        speak(text)
+        """Forward to global speak function using chosen voice."""
+        speak(text, voice=self.voice)
 
     def listen(self, duration: int = 5, sample_rate: int = 16000) -> Optional[str]:
         """Record audio from default microphone and transcribe via faster-whisper."""
@@ -183,9 +240,10 @@ class VoiceAssistant:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant")
+    parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant (Kokoro TTS)")
     parser.add_argument("--cli", action="store_true", help="Run in text CLI mode instead of microphone voice loop")
     parser.add_argument("--model", type=str, default="jarvis", help="Ollama model name (default: jarvis)")
+    parser.add_argument("--voice", type=str, default=CHOSEN_VOICE, help="Kokoro voice (default: am_michael)")
     parser.add_argument("--listen-duration", type=int, default=5, help="Audio record duration in seconds")
     parser.add_argument("--stats", action="store_true", help="Print system statistics and exit")
     args = parser.parse_args()
@@ -195,7 +253,7 @@ def main():
         print(stats["summary"])
         return
 
-    assistant = VoiceAssistant(model_name=args.model)
+    assistant = VoiceAssistant(model_name=args.model, voice=args.voice)
 
     if args.cli:
         assistant.run_cli_loop()
