@@ -27,6 +27,8 @@ try:
 except ImportError:
     WhisperModel = None
 
+from openwakeword.model import Model
+
 from tools.system_ctrl import (
     handle_system_command,
     get_system_stats,
@@ -386,18 +388,62 @@ class VoiceAssistant:
         return True
 
     def run_voice_loop(self):
-        """Continuously run the voice interaction loop with dynamic silence detection."""
-        self.speak("Jarvis is online and ready for commands.")
+        """Continuously run the voice interaction loop with 'Hey Jarvis' wake word detection."""
         try:
-            while True:
-                user_text = self.listen()
-                if user_text and user_text.strip():
-                    print(f"[User]: {user_text}")
-                    should_continue = self.process_input(user_text)
-                    if not should_continue:
-                        break
-                else:
-                    time.sleep(0.1)
+            import openwakeword.utils
+            openwakeword.utils.download_models(model_names=["hey_jarvis"])
+        except Exception:
+            pass
+
+        oww_model = Model(wakeword_models=["hey_jarvis"])
+        self.speak("Jarvis is online and ready for commands.")
+        print("\n[Jarvis]: Listening for 'Hey Jarvis' wake word...\n")
+
+        chunk_size = 1280  # 80ms audio chunk at 16kHz for openwakeword
+        sample_rate = 16000
+
+        try:
+            with sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16") as stream:
+                while True:
+                    try:
+                        audio_chunk, _ = stream.read(chunk_size)
+                    except (sd.PortAudioError, OSError) as mic_err:
+                        print(f"[Microphone Error]: {mic_err}")
+                        time.sleep(1.0)
+                        continue
+
+                    if audio_chunk is None or len(audio_chunk) == 0:
+                        continue
+
+                    prediction = oww_model.predict(audio_chunk.flatten())
+                    score = prediction.get("hey_jarvis", 0.0)
+
+                    if score >= 0.5:
+                        print(f"\n[Wake Word]: 'Hey Jarvis' detected! (confidence: {score:.2f})")
+                        oww_model.reset()
+                        try:
+                            stream.stop()
+                        except Exception:
+                            pass
+
+                        # Play a short greeting
+                        self.speak("At your service, sir.")
+
+                        # Immediately trigger Whisper transcription function to listen for user command
+                        user_text = self.listen()
+                        if user_text and user_text.strip():
+                            print(f"[User]: {user_text}")
+                            should_continue = self.process_input(user_text)
+                            if not should_continue:
+                                break
+
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+
         except KeyboardInterrupt:
             self.speak("Jarvis paused. Goodbye.")
 

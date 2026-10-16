@@ -364,6 +364,33 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assertIsNone(result)
         mock_sleep.assert_called_with(1.0)
 
+    @patch("main.Model")
+    @patch("sounddevice.InputStream")
+    @patch.object(VoiceAssistant, "speak")
+    @patch.object(VoiceAssistant, "listen", return_value="Check system status")
+    @patch.object(VoiceAssistant, "process_input", return_value=False)
+    def test_run_voice_loop_wake_word_trigger(self, mock_process, mock_listen, mock_speak, mock_stream, mock_model_cls):
+        # Mock openwakeword Model instance
+        mock_model_instance = MagicMock()
+        mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
+        mock_model_cls.return_value = mock_model_instance
+
+        # Mock InputStream reading chunks
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.read.return_value = (np.zeros(1280, dtype=np.int16), False)
+        mock_stream.return_value.__enter__.return_value = mock_stream_instance
+
+        self.assistant.run_voice_loop()
+
+        # Check Model was initialized with hey_jarvis
+        mock_model_cls.assert_called_with(wakeword_models=["hey_jarvis"])
+        # Check short greeting was spoken
+        mock_speak.assert_any_call("At your service, sir.")
+        # Check listen was immediately triggered
+        mock_listen.assert_called_once()
+        # Check command was processed
+        mock_process.assert_called_with("Check system status")
+
 
 if __name__ == "__main__":
     unittest.main()

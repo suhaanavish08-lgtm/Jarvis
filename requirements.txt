@@ -9,3 +9,4 @@ kokoro-onnx
 soundfile
 requests
 pyautogui
+openwakeword
