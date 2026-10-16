@@ -5,6 +5,11 @@ from .system_ctrl import (
     open_application,
     control_spotify,
     is_spotify_running,
+    run_powershell_command,
+    search_web,
+    manage_volume,
+    capture_screen,
+    list_running_processes,
     handle_system_command,
     TOOL_SCHEMAS,
 )
@@ -15,6 +20,11 @@ __all__ = [
     "open_application",
     "control_spotify",
     "is_spotify_running",
+    "run_powershell_command",
+    "search_web",
+    "manage_volume",
+    "capture_screen",
+    "list_running_processes",
     "handle_system_command",
     "TOOL_SCHEMAS",
 ]

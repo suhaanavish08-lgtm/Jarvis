@@ -10,3 +10,5 @@ soundfile
 requests
 pyautogui
 openwakeword
+duckduckgo-search
+pillow

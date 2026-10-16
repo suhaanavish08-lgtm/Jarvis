@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch, call
+import subprocess
 import numpy as np
 
 # Ensure src directory is in sys.path
@@ -18,6 +19,11 @@ from tools.system_ctrl import (
     launch_app,
     control_spotify,
     is_spotify_running,
+    run_powershell_command,
+    search_web,
+    manage_volume,
+    capture_screen,
+    list_running_processes,
     handle_system_command,
     TOOL_SCHEMAS,
 )
@@ -172,7 +178,6 @@ class TestSpotifyControls(unittest.TestCase):
     def test_spotify_safeguard_launches_when_not_running(self, mock_press, mock_sleep, mock_os_system, mock_running):
         success, msg = control_spotify("playpause")
         self.assertTrue(success)
-        # Should launch Spotify and wait 2 seconds first
         mock_os_system.assert_called_with("start spotify:")
         mock_sleep.assert_any_call(2.0)
         mock_press.assert_called_with("playpause")
@@ -186,12 +191,9 @@ class TestSpotifyControls(unittest.TestCase):
     def test_spotify_search_focus_and_keystrokes(self, mock_press, mock_write, mock_hotkey, mock_sleep, mock_os_system, mock_running):
         success, msg = control_spotify("search", query="The Hills")
         self.assertTrue(success)
-        # Verify focus is ensured via start spotify:
         mock_os_system.assert_called_with("start spotify:")
-        # Verify keystrokes
         mock_hotkey.assert_called_with("ctrl", "l")
         mock_write.assert_called_with("The Hills")
-        # Verify navigation tabs and play enter
         tab_calls = [c for c in mock_press.call_args_list if c == call("tab")]
         self.assertEqual(len(tab_calls), 3)
         self.assertIn("Playing The Hills on Spotify", msg)
@@ -217,7 +219,6 @@ class TestKokoroTTSEngine(unittest.TestCase):
         text = "Good morning, sir. All systems are operational; CPU load is 14%. Shall I bring up the diagnostics?"
         chunks = chunk_text(text, max_chunk_chars=50)
         self.assertTrue(len(chunks) >= 2)
-        # Verify content was preserved
         combined_text = " ".join(chunks)
         self.assertIn("Good morning, sir.", combined_text)
         self.assertIn("operational;", combined_text)
@@ -243,6 +244,64 @@ class TestKokoroTTSEngine(unittest.TestCase):
         mock_wait.assert_called_once()
 
 
+class TestOmniTools(unittest.TestCase):
+    """Test PowerShell runner, DuckDuckGo search, volume control, screenshot, and process listing."""
+
+    def test_run_powershell_command_valid(self):
+        output = run_powershell_command("Write-Output 'OmniTool Active'")
+        self.assertIn("OmniTool Active", output)
+
+    def test_run_powershell_command_empty(self):
+        output = run_powershell_command("   ")
+        self.assertEqual(output, "Command cannot be empty.")
+
+    def test_run_powershell_destructive_blocked(self):
+        output1 = run_powershell_command("Remove-Item -Recurse C:\\")
+        self.assertIn("Execution blocked", output1)
+        output2 = run_powershell_command("del /f /s /q c:\\")
+        self.assertIn("Execution blocked", output2)
+        output3 = run_powershell_command("format-volume")
+        self.assertIn("Execution blocked", output3)
+
+    @patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="sleep", timeout=10))
+    def test_run_powershell_timeout(self, mock_run):
+        output = run_powershell_command("Start-Sleep 15")
+        self.assertEqual(output, "Command timed out after 10 seconds.")
+
+    def test_search_web_valid(self):
+        result = search_web("Python programming language", max_results=2)
+        self.assertIsInstance(result, str)
+        self.assertTrue(len(result) > 0)
+        self.assertNotIn("Search query cannot be empty", result)
+
+    def test_search_web_empty(self):
+        result = search_web("   ")
+        self.assertEqual(result, "Search query cannot be empty.")
+
+    @patch("pyautogui.press")
+    def test_manage_volume_mute_unmute_and_set(self, mock_press):
+        msg_mute = manage_volume("mute")
+        mock_press.assert_called_with("volumemute")
+        self.assertIn("muted", msg_mute.lower())
+
+        msg_unmute = manage_volume("unmute")
+        self.assertIn("unmuted", msg_unmute.lower())
+
+        msg_set = manage_volume("set", value=50)
+        self.assertIn("50%", msg_set)
+
+    def test_capture_screen(self):
+        result = capture_screen()
+        self.assertIn("Screenshot captured successfully", result)
+        self.assertIn("Dimensions:", result)
+
+    def test_list_running_processes(self):
+        result = list_running_processes(limit=5)
+        self.assertIn("Top 5 processes by resource usage:", result)
+        self.assertIn("CPU", result)
+        self.assertIn("RAM", result)
+
+
 class TestLLMToolCalling(unittest.TestCase):
     """Test LLM tool-calling simulation with Ollama: argument parsing, execution, and history recording."""
 
@@ -251,7 +310,6 @@ class TestLLMToolCalling(unittest.TestCase):
 
     @patch("ollama.chat")
     def test_tool_calling_system_stats(self, mock_ollama_chat):
-        # Simulate Ollama tool call response
         mock_ollama_chat.return_value = {
             "message": {
                 "role": "assistant",
@@ -270,7 +328,6 @@ class TestLLMToolCalling(unittest.TestCase):
         reply = self.assistant.query_ollama("Check system health")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("CPU is running at", reply)
-        # Check history fed back
         last_history = self.assistant.conversation_history[-1]
         self.assertEqual(last_history["role"], "assistant")
         self.assertIn("CPU is running at", last_history["content"])
@@ -279,7 +336,6 @@ class TestLLMToolCalling(unittest.TestCase):
     @patch("tools.system_ctrl.is_spotify_running", return_value=True)
     @patch("pyautogui.press")
     def test_tool_calling_spotify_json_string_arguments(self, mock_press, mock_running, mock_ollama_chat):
-        # Simulate tool call with arguments as a JSON string instead of dict
         mock_ollama_chat.return_value = {
             "message": {
                 "role": "assistant",
@@ -323,6 +379,112 @@ class TestLLMToolCalling(unittest.TestCase):
         self.assertIn("Task manager opened", reply)
         mock_popen.assert_called_with("taskmgr.exe", shell=True)
 
+    @patch("ollama.chat")
+    def test_tool_calling_powershell(self, mock_ollama_chat):
+        mock_ollama_chat.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "run_powershell_command",
+                            "arguments": {"command": "Write-Output 'Diagnostic Test'"}
+                        }
+                    }
+                ]
+            }
+        }
+
+        reply = self.assistant.query_ollama("Run a quick diagnostic test in PowerShell")
+        self.assertIn("Certainly, sir", reply)
+        self.assertIn("Diagnostic Test", reply)
+
+    @patch("ollama.chat")
+    def test_tool_calling_search_web(self, mock_ollama_chat):
+        mock_ollama_chat.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "search_web",
+                            "arguments": {"query": "Latest AI news", "max_results": 2}
+                        }
+                    }
+                ]
+            }
+        }
+
+        reply = self.assistant.query_ollama("Search the web for latest AI news")
+        self.assertIn("Certainly, sir", reply)
+        self.assertTrue(len(reply) > 20)
+
+    @patch("ollama.chat")
+    @patch("pyautogui.press")
+    def test_tool_calling_manage_volume(self, mock_press, mock_ollama_chat):
+        mock_ollama_chat.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "manage_volume",
+                            "arguments": {"action": "mute"}
+                        }
+                    }
+                ]
+            }
+        }
+
+        reply = self.assistant.query_ollama("Mute the sound")
+        self.assertIn("Certainly, sir", reply)
+        self.assertIn("muted", reply.lower())
+
+    @patch("ollama.chat")
+    def test_tool_calling_capture_screen(self, mock_ollama_chat):
+        mock_ollama_chat.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "capture_screen",
+                            "arguments": {}
+                        }
+                    }
+                ]
+            }
+        }
+
+        reply = self.assistant.query_ollama("Take a screenshot")
+        self.assertIn("Certainly, sir", reply)
+        self.assertIn("Screenshot captured successfully", reply)
+
+    @patch("ollama.chat")
+    def test_tool_calling_list_running_processes(self, mock_ollama_chat):
+        mock_ollama_chat.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "list_running_processes",
+                            "arguments": {"limit": 5}
+                        }
+                    }
+                ]
+            }
+        }
+
+        reply = self.assistant.query_ollama("Check what processes are using CPU")
+        self.assertIn("Certainly, sir", reply)
+        self.assertIn("processes by resource usage", reply)
+
     def test_empty_prompt_handling(self):
         reply = self.assistant.query_ollama("   ")
         self.assertEqual(reply, "Awaiting your command, sir.")
@@ -335,7 +497,6 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assistant = VoiceAssistant(model_name="jarvis", voice="bm_daniel")
 
     def test_process_input_empty_and_whitespace(self):
-        # Empty or whitespace inputs should be ignored gracefully
         self.assertTrue(self.assistant.process_input(None))
         self.assertTrue(self.assistant.process_input(""))
         self.assertTrue(self.assistant.process_input("   \t  "))
@@ -348,12 +509,10 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
     @patch("sounddevice.InputStream")
     def test_listen_silent_room_timeout(self, mock_input_stream):
-        # Mock stream reading silence (all zeros)
         mock_stream_instance = MagicMock()
         mock_stream_instance.read.return_value = (np.zeros((1024, 1), dtype=np.float32), False)
         mock_input_stream.return_value.__enter__.return_value = mock_stream_instance
 
-        # max_silent_time = 0.05 seconds to quickly verify silent room timeout
         result = self.assistant.listen(max_silent_time=0.05)
         self.assertIsNone(result)
 
@@ -370,25 +529,19 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
     @patch.object(VoiceAssistant, "listen", return_value="Check system status")
     @patch.object(VoiceAssistant, "process_input", return_value=False)
     def test_run_voice_loop_wake_word_trigger(self, mock_process, mock_listen, mock_speak, mock_stream, mock_model_cls):
-        # Mock openwakeword Model instance
         mock_model_instance = MagicMock()
         mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
         mock_model_cls.return_value = mock_model_instance
 
-        # Mock InputStream reading chunks
         mock_stream_instance = MagicMock()
         mock_stream_instance.read.return_value = (np.zeros(1280, dtype=np.int16), False)
         mock_stream.return_value.__enter__.return_value = mock_stream_instance
 
         self.assistant.run_voice_loop()
 
-        # Check Model was initialized with hey_jarvis
         mock_model_cls.assert_called_with(wakeword_models=["hey_jarvis"])
-        # Check short greeting was spoken
         mock_speak.assert_any_call("At your service, sir.")
-        # Check listen was immediately triggered
         mock_listen.assert_called_once()
-        # Check command was processed
         mock_process.assert_called_with("Check system status")
 
 

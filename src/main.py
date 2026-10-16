@@ -36,6 +36,11 @@ from tools.system_ctrl import (
     open_application,
     control_spotify,
     is_spotify_running,
+    run_powershell_command,
+    search_web,
+    manage_volume,
+    capture_screen,
+    list_running_processes,
     TOOL_SCHEMAS,
 )
 
@@ -334,6 +339,21 @@ class VoiceAssistant:
                     elif fn_name == "get_system_stats":
                         stats = get_system_stats()
                         tool_replies.append(stats["summary"])
+                    elif fn_name == "run_powershell_command":
+                        cmd_out = run_powershell_command(command=fn_args.get("command", ""))
+                        tool_replies.append(cmd_out)
+                    elif fn_name == "search_web":
+                        search_out = search_web(query=fn_args.get("query", ""), max_results=int(fn_args.get("max_results", 3)))
+                        tool_replies.append(search_out)
+                    elif fn_name == "manage_volume":
+                        vol_out = manage_volume(action=fn_args.get("action", "mute"), value=int(fn_args.get("value", 0)))
+                        tool_replies.append(vol_out)
+                    elif fn_name == "capture_screen":
+                        screen_out = capture_screen()
+                        tool_replies.append(screen_out)
+                    elif fn_name == "list_running_processes":
+                        procs_out = list_running_processes(limit=int(fn_args.get("limit", 10)))
+                        tool_replies.append(procs_out)
                     else:
                         tool_replies.append(f"Function {fn_name} is not recognized.")
 

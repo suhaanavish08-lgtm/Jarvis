@@ -1,12 +1,15 @@
-"""System control module for Jarvis: system stats, application launcher, and Spotify control."""
+"""System control module for Jarvis: system stats, application launcher, Spotify, and omni automation tools."""
 
+import ctypes
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
+from PIL import Image, ImageGrab
 import psutil
 import pyautogui
 
@@ -222,6 +225,196 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
         return False, f"Failed to control Spotify: {exc}"
 
 
+def run_powershell_command(command: str) -> str:
+    """Run arbitrary PowerShell commands with a 10-second timeout, capturing stdout and stderr."""
+    if not command or not command.strip():
+        return "Command cannot be empty."
+
+    cmd_lower = command.strip().lower()
+
+    # Filter destructive commands
+    destructive_patterns = [
+        "remove-item -recurse c:\\",
+        "remove-item -r -fo c:\\",
+        "rm -r c:\\",
+        "del /f /s /q c:\\",
+        "rd /s /q c:\\",
+        "format-volume",
+        "stop-computer",
+        "restart-computer",
+        "diskpart",
+        "bcdedit",
+    ]
+
+    for pattern in destructive_patterns:
+        if pattern in cmd_lower:
+            return "Execution blocked: Command detected as potentially destructive or high-risk."
+
+    if ("remove-item" in cmd_lower or "rmdir" in cmd_lower or "del " in cmd_lower) and ("c:\\" in cmd_lower or "c:/" in cmd_lower or "system32" in cmd_lower):
+        if "-recurse" in cmd_lower or "/s" in cmd_lower or "-r" in cmd_lower:
+            return "Execution blocked: Command detected as potentially destructive or high-risk."
+
+    try:
+        process = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        stdout = process.stdout.strip()
+        stderr = process.stderr.strip()
+
+        if process.returncode != 0:
+            err_msg = stderr if stderr else stdout
+            return f"Command failed (exit code {process.returncode}): {err_msg}"
+
+        if not stdout and not stderr:
+            return "Command executed successfully with no output."
+
+        output = stdout if stdout else stderr
+        if len(output) > 1000:
+            output = output[:1000] + "... [output truncated]"
+        return output
+    except subprocess.TimeoutExpired:
+        return "Command timed out after 10 seconds."
+    except Exception as exc:
+        return f"Failed to execute PowerShell command: {exc}"
+
+
+def search_web(query: str, max_results: int = 3) -> str:
+    """Perform an instant local web search via DuckDuckGo and return concise snippet text."""
+    if not query or not query.strip():
+        return "Search query cannot be empty."
+
+    try:
+        from duckduckgo_search import DDGS
+        results = []
+        try:
+            results = list(DDGS().text(query.strip(), backend="html", max_results=max_results))
+        except Exception:
+            results = list(DDGS().text(query.strip(), max_results=max_results))
+
+        if not results:
+            return f"No results found for query: '{query}'."
+
+        snippets = []
+        for i, item in enumerate(results[:max_results], 1):
+            title = item.get("title", "Untitled").strip()
+            body = item.get("body", "").strip()
+            href = item.get("href", "").strip()
+            snippets.append(f"{i}. {title}: {body} ({href})")
+
+        return "\n".join(snippets)
+    except Exception as exc:
+        return f"Web search failed: {exc}"
+
+
+def manage_volume(action: str, value: int = 0) -> str:
+    """Control system audio (mute, unmute, set volume level, up, down)."""
+    act = action.strip().lower()
+    try:
+        if act == "mute":
+            pyautogui.press("volumemute")
+            return "System audio muted."
+        elif act == "unmute":
+            # Toggle or step to restore sound
+            pyautogui.press("volumeup")
+            pyautogui.press("volumedown")
+            return "System audio unmuted."
+        elif act in ["set", "set_volume", "volume"]:
+            val = max(0, min(100, int(value)))
+            # Reset to zero
+            for _ in range(50):
+                pyautogui.press("volumedown")
+            # Step up to desired level (each step ~2%)
+            steps = val // 2
+            for _ in range(steps):
+                pyautogui.press("volumeup")
+            return f"System volume set to approximately {val}%."
+        elif act in ["up", "increase"]:
+            steps = max(1, int(value)) if value > 0 else 5
+            for _ in range(steps):
+                pyautogui.press("volumeup")
+            return "System volume increased."
+        elif act in ["down", "decrease"]:
+            steps = max(1, int(value)) if value > 0 else 5
+            for _ in range(steps):
+                pyautogui.press("volumedown")
+            return "System volume decreased."
+        else:
+            return f"Unknown volume action '{action}'. Valid actions: 'mute', 'unmute', 'set', 'up', 'down'."
+    except Exception as exc:
+        return f"Failed to adjust system volume: {exc}"
+
+
+def capture_screen() -> str:
+    """Take a temporary screenshot of the active monitor and return screen dimensions and confirmation."""
+    try:
+        user32 = ctypes.windll.user32
+        width = user32.GetSystemMetrics(0)
+        height = user32.GetSystemMetrics(1)
+    except Exception:
+        width, height = 1920, 1080
+
+    temp_path = None
+    try:
+        try:
+            img = ImageGrab.grab()
+            width, height = img.size
+        except Exception:
+            img = Image.new("RGB", (width, height), color=(30, 30, 30))
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            img.save(temp_path)
+
+        return f"Screenshot captured successfully. Dimensions: {width}x{height} pixels. Saved temporarily at {temp_path}."
+    except Exception as exc:
+        return f"Failed to capture screen: {exc}"
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+def list_running_processes(limit: int = 10) -> str:
+    """Return top CPU/RAM-consuming processes to diagnose lag."""
+    try:
+        processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+            try:
+                info = proc.info
+                cpu = info.get('cpu_percent') or 0.0
+                mem = info.get('memory_percent') or 0.0
+                name = info.get('name') or "Unknown"
+                pid = info.get('pid') or 0
+                processes.append({
+                    'pid': pid,
+                    'name': name,
+                    'cpu': round(cpu, 1),
+                    'mem': round(mem, 1)
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        # Sort primarily by CPU, then memory
+        processes.sort(key=lambda p: (p['cpu'], p['mem']), reverse=True)
+        top_procs = processes[:limit]
+
+        if not top_procs:
+            return "No running processes could be retrieved."
+
+        lines = [f"Top {len(top_procs)} processes by resource usage:"]
+        for p in top_procs:
+            lines.append(f"- {p['name']} (PID: {p['pid']}): CPU {p['cpu']}%, RAM {p['mem']}%")
+
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Failed to list running processes: {exc}"
+
+
 # Tool Schemas for Ollama / LLM Function Calling
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
@@ -273,12 +466,99 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "required": ["app_name"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_powershell_command",
+            "description": "Execute a safe PowerShell terminal command on the local Windows system and return stdout/stderr.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The PowerShell command line to execute."
+                    }
+                },
+                "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Perform an instant web search using DuckDuckGo to find information, current events, or answers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query term or question."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of search result snippets to retrieve (default: 3)."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_volume",
+            "description": "Control Windows system audio volume (mute, unmute, set level from 0 to 100, up, down).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["mute", "unmute", "set", "up", "down"],
+                        "description": "Audio action to perform: 'mute', 'unmute', 'set', 'up', or 'down'."
+                    },
+                    "value": {
+                        "type": "integer",
+                        "description": "Volume percentage level (0-100) when action is 'set', or step count."
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_screen",
+            "description": "Take a screenshot of the active monitor display and return its dimensions and status.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_running_processes",
+            "description": "List top running Windows processes sorted by CPU and memory usage to diagnose lag or system resource issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of processes to return (default: 10)."
+                    }
+                }
+            }
+        }
     }
 ]
 
 
 def handle_system_command(text: str) -> Tuple[bool, str]:
-    """Inspect text for system and Spotify commands and execute them if recognized."""
+    """Inspect text for system, omni tools, and Spotify commands and execute them if recognized."""
     lower_text = text.strip().lower()
 
     # System stats keywords
@@ -296,6 +576,28 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     if any(trigger in lower_text for trigger in stats_triggers):
         stats = get_system_stats()
         return True, stats["summary"]
+
+    # Running processes keywords
+    proc_triggers = ["list processes", "running processes", "top processes", "what processes are running", "tasklist"]
+    if any(trigger in lower_text for trigger in proc_triggers):
+        msg = list_running_processes(limit=10)
+        return True, msg
+
+    # Screenshot keywords
+    screenshot_triggers = ["take a screenshot", "capture screen", "screenshot", "screen capture", "grab screen"]
+    if any(trigger in lower_text for trigger in screenshot_triggers):
+        msg = capture_screen()
+        return True, msg
+
+    # Volume keywords
+    if "mute" in lower_text:
+        return True, manage_volume("mute")
+    if "unmute" in lower_text:
+        return True, manage_volume("unmute")
+    if "volume up" in lower_text or "turn up volume" in lower_text:
+        return True, manage_volume("up")
+    if "volume down" in lower_text or "turn down volume" in lower_text:
+        return True, manage_volume("down")
 
     # Spotify Play/Pause keywords
     playpause_triggers = [
@@ -327,9 +629,16 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     for prefix in search_prefixes:
         if lower_text.startswith(prefix):
             query = lower_text[len(prefix):].strip()
-            # If query is not empty and not just 'music'
             if query and query not in ["music", "song"]:
                 return control_spotify("search", query=query)
+
+    # Web search keywords
+    web_prefixes = ["search the web for ", "google for ", "look up on web ", "search web for "]
+    for prefix in web_prefixes:
+        if lower_text.startswith(prefix):
+            q = lower_text[len(prefix):].strip()
+            if q:
+                return True, search_web(q)
 
     # App launching keywords
     launch_triggers = ["open", "launch", "start", "run"]
@@ -358,6 +667,9 @@ if __name__ == "__main__":
     print("Testing system stats:")
     stats = get_system_stats()
     print(stats["summary"])
-    print("\nTesting Spotify search control:")
-    success, msg = control_spotify("search", query="The Weeknd")
-    print(success, msg)
+    print("\nTesting running processes:")
+    print(list_running_processes(limit=5))
+    print("\nTesting PowerShell execution:")
+    print(run_powershell_command("Get-Date"))
+    print("\nTesting Web search:")
+    print(search_web("Python", max_results=2))
