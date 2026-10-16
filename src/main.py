@@ -4,10 +4,11 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import time
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from kokoro_onnx import Kokoro
 import numpy as np
@@ -32,6 +33,7 @@ from tools.system_ctrl import (
     launch_app,
     open_application,
     control_spotify,
+    is_spotify_running,
     TOOL_SCHEMAS,
 )
 
@@ -80,26 +82,97 @@ _model_path, _voices_path = ensure_kokoro_models()
 kokoro = Kokoro(model_path=_model_path, voices_path=_voices_path)
 
 
-def speak(text: str, voice: str = "bm_daniel", speed: float = 1.1):
-    """Generate audio using Kokoro TTS with voice='bm_daniel' and speed=1.1, playing via sounddevice."""
+def chunk_text(text: str, max_chunk_chars: int = 180) -> List[str]:
+    """Split text into spoken sentence chunks on punctuation delimiters without audio buffer clipping."""
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+
+    # Split text on sentence and clause boundaries: periods, exclamation marks, question marks, semicolons, newlines
+    raw_sentences = re.split(r'(?<=[.!?;\n])\s+', cleaned)
+    chunks: List[str] = []
+    current = ""
+
+    for s in raw_sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(current) + len(s) + 1 <= max_chunk_chars:
+            current = f"{current} {s}".strip() if current else s
+        else:
+            if current:
+                chunks.append(current)
+            # If an individual segment exceeds max_chunk_chars, split on commas or spaces
+            if len(s) > max_chunk_chars:
+                comma_parts = re.split(r'(?<=[,])\s+', s)
+                sub_current = ""
+                for p in comma_parts:
+                    if len(sub_current) + len(p) + 1 <= max_chunk_chars:
+                        sub_current = f"{sub_current} {p}".strip() if sub_current else p
+                    else:
+                        if sub_current:
+                            chunks.append(sub_current)
+                        sub_current = p
+                if sub_current:
+                    chunks.append(sub_current)
+                current = ""
+            else:
+                current = s
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def synthesize_speech(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1) -> Tuple[Optional[np.ndarray], int]:
+    """Synthesize speech audio array using Kokoro TTS with sentence chunking to prevent buffer clipping."""
+    cleaned = text.strip()
+    if not cleaned:
+        return None, 24000
+
+    chunks = chunk_text(cleaned)
+    if not chunks:
+        return None, 24000
+
+    audio_segments = []
+    sample_rate = 24000
+
+    for chunk in chunks:
+        try:
+            samples, sr = kokoro.create(chunk, voice=voice, speed=speed, lang="en-us")
+            if samples is not None and len(samples) > 0:
+                audio_segments.append(samples)
+                sample_rate = sr
+                # Subtle 50ms pause between sentence chunks for natural phrasing
+                pause = np.zeros(int(sample_rate * 0.05), dtype=np.float32)
+                audio_segments.append(pause)
+        except Exception as err:
+            print(f"[Kokoro Chunk Error on '{chunk}']: {err}")
+
+    if not audio_segments:
+        return None, sample_rate
+
+    combined = np.concatenate(audio_segments, axis=0)
+    return combined, sample_rate
+
+
+def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
+    """Generate and play audio using Kokoro TTS with sentence chunking and sounddevice."""
     print(f"\n[Jarvis]: {text}\n")
-    if not text.strip():
+    if not text or not text.strip():
         return
     try:
-        samples, sample_rate = kokoro.create(
-            text,
-            voice=voice,
-            speed=speed,
-            lang="en-us"
-        )
-        sd.play(samples, sample_rate)
-        sd.wait()
+        combined, sample_rate = synthesize_speech(text, voice=voice, speed=speed)
+        if combined is not None and len(combined) > 0:
+            sd.play(combined, sample_rate)
+            sd.wait()
     except Exception as e:
         print(f"[Kokoro TTS Error]: {e}")
 
 
 class VoiceAssistant:
-    def __init__(self, model_name: str = "jarvis", whisper_size: str = "large-v3-turbo", voice: str = "bm_daniel"):
+    def __init__(self, model_name: str = "jarvis", whisper_size: str = "large-v3-turbo", voice: str = CHOSEN_VOICE):
         self.model_name = model_name
         self.whisper_size = whisper_size
         self.voice = voice
@@ -130,8 +203,10 @@ class VoiceAssistant:
         speech_threshold: float = 0.03,
         silence_threshold: float = 0.02,
         silence_timeout: float = 1.5,
+        max_silent_time: float = 8.0,
+        max_record_time: float = 15.0,
     ) -> Optional[str]:
-        """Record audio dynamically using InputStream and silence detection, then transcribe."""
+        """Record audio dynamically with silence detection, clipping protection, and disconnection resilience."""
         try:
             print("[Listening for speech...]")
             frames = []
@@ -139,38 +214,61 @@ class VoiceAssistant:
             pre_buffer_max_chunks = int(0.3 * sample_rate / chunk_size)  # Keep ~300ms pre-speech
             is_speaking = False
             silence_start_time = None
+            listen_start_time = time.time()
+            record_start_time = None
 
-            with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32") as stream:
-                while True:
-                    chunk, _ = stream.read(chunk_size)
-                    volume = float(np.max(np.abs(chunk)))
+            try:
+                with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32") as stream:
+                    while True:
+                        chunk, overflowed = stream.read(chunk_size)
+                        if chunk is None or len(chunk) == 0:
+                            break
 
-                    if not is_speaking:
-                        pre_buffer.append(chunk)
-                        if len(pre_buffer) > pre_buffer_max_chunks:
-                            pre_buffer.pop(0)
+                        # Guard against clipping wrap-around
+                        chunk = np.clip(chunk, -1.0, 1.0)
+                        volume = float(np.max(np.abs(chunk)))
 
-                        if volume >= speech_threshold:
-                            is_speaking = True
-                            frames.extend(pre_buffer)
-                            frames.append(chunk)
-                            silence_start_time = None
-                            print("[Speech detected, recording...]")
-                    else:
-                        frames.append(chunk)
-                        if volume < silence_threshold:
-                            if silence_start_time is None:
-                                silence_start_time = time.time()
-                            elif time.time() - silence_start_time >= silence_timeout:
-                                break
+                        if not is_speaking:
+                            pre_buffer.append(chunk)
+                            if len(pre_buffer) > pre_buffer_max_chunks:
+                                pre_buffer.pop(0)
+
+                            if volume >= speech_threshold:
+                                is_speaking = True
+                                record_start_time = time.time()
+                                frames.extend(pre_buffer)
+                                frames.append(chunk)
+                                silence_start_time = None
+                                print("[Speech detected, recording...]")
+                            elif time.time() - listen_start_time >= max_silent_time:
+                                # Silent room timeout: return None to allow looping and status checks
+                                return None
                         else:
-                            silence_start_time = None
+                            frames.append(chunk)
+                            # Protect against continuous ambient noise infinite recording
+                            if record_start_time and (time.time() - record_start_time >= max_record_time):
+                                break
+
+                            if volume < silence_threshold:
+                                if silence_start_time is None:
+                                    silence_start_time = time.time()
+                                elif time.time() - silence_start_time >= silence_timeout:
+                                    break
+                            else:
+                                silence_start_time = None
+
+            except (sd.PortAudioError, OSError) as audio_err:
+                print(f"[Microphone Error]: Audio device unavailable or disconnected: {audio_err}")
+                time.sleep(1.0)
+                return None
 
             if not frames:
                 return None
 
             print("[Transcribing audio...]")
             audio_data = np.concatenate(frames, axis=0)
+            # Clip audio array before 16-bit integer conversion
+            audio_data = np.clip(audio_data, -1.0, 1.0)
             audio_int16 = (audio_data * 32767).astype(np.int16)
 
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
@@ -195,11 +293,15 @@ class VoiceAssistant:
             return None
 
     def query_ollama(self, user_prompt: str) -> str:
-        """Send prompt to Ollama running the local jarvis model with tool support."""
+        """Send prompt to Ollama running the local jarvis model with safe tool calling support."""
         if not ollama:
             return "Ollama library is not installed in the environment."
 
-        self.conversation_history.append({"role": "user", "content": user_prompt})
+        clean_prompt = user_prompt.strip()
+        if not clean_prompt:
+            return "Awaiting your command, sir."
+
+        self.conversation_history.append({"role": "user", "content": clean_prompt})
 
         try:
             response = ollama.chat(
@@ -212,8 +314,15 @@ class VoiceAssistant:
             if tool_calls:
                 tool_replies = []
                 for tool in tool_calls:
-                    fn_name = tool.get("function", {}).get("name")
-                    fn_args = tool.get("function", {}).get("arguments", {})
+                    fn_info = tool.get("function", {})
+                    fn_name = fn_info.get("name")
+                    fn_args = fn_info.get("arguments", {})
+                    if isinstance(fn_args, str):
+                        try:
+                            fn_args = json.loads(fn_args)
+                        except Exception:
+                            fn_args = {}
+
                     if fn_name == "control_spotify":
                         _, msg = control_spotify(action=fn_args.get("action", ""), query=fn_args.get("query", ""))
                         tool_replies.append(msg)
@@ -223,10 +332,16 @@ class VoiceAssistant:
                     elif fn_name == "get_system_stats":
                         stats = get_system_stats()
                         tool_replies.append(stats["summary"])
+                    else:
+                        tool_replies.append(f"Function {fn_name} is not recognized.")
 
-                reply = " ".join(tool_replies) if tool_replies else message.get("content", "").strip()
+                tool_text = " ".join(tool_replies) if tool_replies else message.get("content", "").strip()
+                # Feed tool execution result into conversation history with polite persona
+                reply = f"Certainly, sir. {tool_text}" if tool_text else "Task completed as requested, sir."
             else:
                 reply = message.get("content", "").strip()
+                if not reply:
+                    reply = "At your command, sir."
 
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
@@ -237,29 +352,37 @@ class VoiceAssistant:
                     model=self.model_name,
                     messages=self.conversation_history[-8:],
                 )
-                reply = response["message"]["content"].strip()
+                reply = response.get("message", {}).get("content", "").strip()
+                if not reply:
+                    reply = "At your service, sir."
                 self.conversation_history.append({"role": "assistant", "content": reply})
                 return reply
-            except Exception as e:
-                return f"Ollama connection error: {e}. Please make sure Ollama is running."
+            except Exception as exc:
+                return f"Ollama connection error: {exc}. Please ensure the service is running, sir."
 
-    def process_input(self, user_text: str) -> bool:
+    def process_input(self, user_text: Optional[str]) -> bool:
         """Process transcribed or typed input. Returns False if user requested exit."""
-        clean_text = user_text.strip().lower()
+        if not user_text:
+            return True
+        clean_text = user_text.strip()
+        if not clean_text:
+            return True
 
-        if clean_text in ["exit", "quit", "shutdown", "stop", "goodbye"]:
+        lower_text = clean_text.lower()
+        if lower_text in ["exit", "quit", "shutdown", "stop", "goodbye"]:
             self.speak("Shutting down. Have a wonderful day, sir.")
             return False
 
         # First evaluate local system & Spotify control commands
-        handled, system_reply = handle_system_command(user_text)
+        handled, system_reply = handle_system_command(clean_text)
         if handled:
             self.speak(system_reply)
             return True
 
         # Otherwise query the Ollama model and speak out loud
-        reply = self.query_ollama(user_text)
-        self.speak(reply)
+        reply = self.query_ollama(clean_text)
+        if reply and reply.strip():
+            self.speak(reply)
         return True
 
     def run_voice_loop(self):
@@ -268,7 +391,7 @@ class VoiceAssistant:
         try:
             while True:
                 user_text = self.listen()
-                if user_text:
+                if user_text and user_text.strip():
                     print(f"[User]: {user_text}")
                     should_continue = self.process_input(user_text)
                     if not should_continue:
@@ -284,7 +407,7 @@ class VoiceAssistant:
         try:
             while True:
                 prompt = input("\nYou: ").strip()
-                if not prompt:
+                if not prompt or not prompt.strip():
                     continue
                 should_continue = self.process_input(prompt)
                 if not should_continue:

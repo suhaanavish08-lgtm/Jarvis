@@ -14,39 +14,63 @@ pyautogui.FAILSAFE = False
 
 
 def get_system_stats() -> Dict[str, Any]:
-    """Retrieve current system resource statistics (CPU, RAM, Disk, Battery)."""
-    cpu_percent = psutil.cpu_percent(interval=0.2)
-    virtual_mem = psutil.virtual_memory()
-    
-    # Disk usage for main system drive
-    system_drive = os.getenv("SystemDrive", "C:") + "\\"
-    disk = psutil.disk_usage(system_drive)
-    
-    battery = psutil.sensors_battery()
-    battery_info = None
-    if battery:
-        battery_info = {
-            "percent": round(battery.percent, 1),
-            "power_plugged": battery.power_plugged,
-        }
+    """Retrieve current system resource statistics (CPU, RAM, Disk, Battery) safely."""
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.2)
+    except Exception:
+        cpu_percent = 0.0
 
-    stats = {
-        "cpu_percent": cpu_percent,
-        "memory": {
+    try:
+        virtual_mem = psutil.virtual_memory()
+        mem_stats = {
             "total_gb": round(virtual_mem.total / (1024 ** 3), 2),
             "used_gb": round(virtual_mem.used / (1024 ** 3), 2),
             "free_gb": round(virtual_mem.available / (1024 ** 3), 2),
             "percent": virtual_mem.percent,
-        },
-        "disk": {
+        }
+    except Exception:
+        mem_stats = {
+            "total_gb": 0.0,
+            "used_gb": 0.0,
+            "free_gb": 0.0,
+            "percent": 0.0,
+        }
+
+    try:
+        system_drive = os.getenv("SystemDrive", "C:") + "\\"
+        disk = psutil.disk_usage(system_drive)
+        disk_stats = {
             "drive": system_drive,
             "total_gb": round(disk.total / (1024 ** 3), 2),
             "free_gb": round(disk.free / (1024 ** 3), 2),
             "percent": disk.percent,
-        },
+        }
+    except Exception:
+        disk_stats = {
+            "drive": "C:\\",
+            "total_gb": 0.0,
+            "free_gb": 0.0,
+            "percent": 0.0,
+        }
+
+    battery_info = None
+    try:
+        battery = psutil.sensors_battery()
+        if battery:
+            battery_info = {
+                "percent": round(battery.percent, 1),
+                "power_plugged": battery.power_plugged,
+            }
+    except Exception:
+        battery_info = None
+
+    stats = {
+        "cpu_percent": cpu_percent,
+        "memory": mem_stats,
+        "disk": disk_stats,
         "battery": battery_info,
     }
-    
+
     summary = (
         f"CPU is running at {stats['cpu_percent']}%. "
         f"Memory usage is at {stats['memory']['percent']}% with {stats['memory']['free_gb']} GB available. "
@@ -55,7 +79,9 @@ def get_system_stats() -> Dict[str, Any]:
     if battery_info:
         plugged_str = "charging" if battery_info["power_plugged"] else "on battery"
         summary += f" Battery is at {battery_info['percent']}% ({plugged_str})."
-        
+    else:
+        summary += " Running on AC power or battery status unavailable."
+
     stats["summary"] = summary
     return stats
 
@@ -80,21 +106,33 @@ def _resolve_antigravity_path() -> str | None:
 
 def open_application(app_name: str) -> Tuple[bool, str]:
     """Launch designated applications via dictionary mapping or universal Windows Start Search fallback."""
+    if not app_name or not app_name.strip():
+        return False, "Application name cannot be empty."
+
+    # Normalize name: strip quotes, whitespace, and convert to lower case
+    name_clean = app_name.strip().strip("'\"").strip().lower()
+
     apps = {
         "settings": "start ms-settings:",
         "file explorer": "explorer.exe",
         "windows explorer": "explorer.exe",
         "explorer": "explorer.exe",
+        "task manager": "taskmgr.exe",
+        "taskmgr": "taskmgr.exe",
+        "calculator": "calc.exe",
+        "calc": "calc.exe",
+        "notepad": "notepad.exe",
         "spotify": "start spotify:",
         "spot if": "start spotify:",
         "antigravity": "agy-ide",
-        "notepad": "notepad.exe",
-        "calculator": "calc.exe",
-        "calc": "calc.exe",
+        "browser": "start https://www.google.com",
+        "default browser": "start https://www.google.com",
+        "chrome": "start chrome",
+        "msedge": "start msedge",
+        "edge": "start msedge",
+        "firefox": "start firefox",
         "brave": "start brave",
     }
-
-    name_clean = app_name.strip().lower()
 
     for key, cmd in apps.items():
         if key in name_clean:
@@ -110,18 +148,19 @@ def open_application(app_name: str) -> Tuple[bool, str]:
                 else:
                     subprocess.Popen(cmd, shell=True)
                 return True, f"{key.capitalize()} opened."
-            except Exception as e:
+            except (OSError, Exception) as e:
                 return False, f"Failed to open {key}: {e}"
 
     # Fallback to Windows Start Menu search
     try:
+        search_target = name_clean
         pyautogui.press("win")
         time.sleep(0.5)
-        pyautogui.write(app_name)
+        pyautogui.write(search_target)
         time.sleep(1.0)
         pyautogui.press("enter")
-        return True, f"Launching {app_name} via Windows search."
-    except Exception as exc:
+        return True, f"Launching {search_target} via Windows search."
+    except (OSError, Exception) as exc:
         return False, f"Failed to launch {app_name}: {exc}"
 
 
@@ -129,17 +168,41 @@ def open_application(app_name: str) -> Tuple[bool, str]:
 launch_app = open_application
 
 
+def is_spotify_running() -> bool:
+    """Check if Spotify.exe process is currently active."""
+    try:
+        for proc in psutil.process_iter(['name']):
+            try:
+                name = proc.info.get('name')
+                if name and name.lower() in ('spotify.exe', 'spotify'):
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+    return False
+
+
 def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
-    """Control Spotify playback or search for songs/artists."""
+    """Control Spotify playback or search for songs/artists with process and focus safeguards."""
     act = action.strip().lower()
     try:
+        # Safeguard: check if Spotify is running; if not, launch it and wait 2 seconds
+        if not is_spotify_running():
+            os.system("start spotify:")
+            time.sleep(2.0)
+
         if act == "playpause":
             pyautogui.press("playpause")
             return True, "Spotify playback toggled."
         elif act in ["next", "shuffle"]:
             pyautogui.press("nexttrack")
             return True, "Skipped to next track on Spotify."
+        elif act in ["previous", "prev", "back"]:
+            pyautogui.press("prevtrack")
+            return True, "Skipped to previous track on Spotify."
         elif act == "search":
+            # Bring Spotify window into focus
             os.system("start spotify:")
             time.sleep(1.5)
             pyautogui.hotkey("ctrl", "l")
@@ -165,14 +228,14 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "control_spotify",
-            "description": "Control Spotify music playback (play, pause, next track, shuffle) or search for songs/artists.",
+            "description": "Control Spotify music playback (play, pause, next track, previous track, shuffle) or search for songs/artists.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["playpause", "next", "shuffle", "search"],
-                        "description": "Action to perform: 'playpause', 'next', 'shuffle', or 'search'."
+                        "enum": ["playpause", "next", "previous", "shuffle", "search"],
+                        "description": "Action to perform: 'playpause', 'next', 'previous', 'shuffle', or 'search'."
                     },
                     "query": {
                         "type": "string",
@@ -198,7 +261,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "open_application",
-            "description": "Launch desktop applications such as Notepad, Calculator, Spotify, or Antigravity.",
+            "description": "Launch desktop applications such as Notepad, Calculator, Spotify, Task Manager, or Antigravity.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -248,6 +311,14 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     if lower_text in next_triggers or any(t in lower_text for t in ["next song", "next track", "skip track", "skip song", "shuffle"]):
         return control_spotify("next")
 
+    # Spotify Previous keywords
+    prev_triggers = [
+        "previous track", "previous song", "prev track", "prev song",
+        "last song", "go back", "replay song", "replay track"
+    ]
+    if lower_text in prev_triggers or any(t in lower_text for t in ["previous track", "previous song", "prev song"]):
+        return control_spotify("previous")
+
     # Spotify search / play artist keywords
     search_prefixes = [
         "search for ", "search spotify for ", "play on spotify ", "play the song ",
@@ -265,7 +336,8 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     for trigger in launch_triggers:
         if trigger in lower_text:
             apps_keywords = [
-                "file explorer", "windows explorer", "explorer", "settings", "brave",
+                "file explorer", "windows explorer", "explorer", "task manager", "taskmgr",
+                "settings", "brave", "browser", "chrome", "firefox", "edge",
                 "spotify", "spot if", "notepad", "calculator", "calc", "antigravity"
             ]
             for app in apps_keywords:

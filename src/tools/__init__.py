@@ -4,6 +4,7 @@ from .system_ctrl import (
     launch_app,
     open_application,
     control_spotify,
+    is_spotify_running,
     handle_system_command,
     TOOL_SCHEMAS,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "launch_app",
     "open_application",
     "control_spotify",
+    "is_spotify_running",
     "handle_system_command",
     "TOOL_SCHEMAS",
 ]
