@@ -7,3 +7,5 @@ psutil
 av<19
 kokoro-onnx
 soundfile
+requests
+pyautogui
