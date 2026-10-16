@@ -76,47 +76,41 @@ def _resolve_antigravity_path() -> str | None:
     return None
 
 
-def launch_app(app_name: str) -> Tuple[bool, str]:
-    """Launch designated applications: antigravity, notepad, calculator, or other system utilities."""
+def open_application(app_name: str) -> Tuple[bool, str]:
+    """Launch designated applications using apps dictionary."""
+    apps = {
+        "notepad": "notepad.exe",
+        "calculator": "calc.exe",
+        "calc": "calc.exe",
+        "spotify": "start spotify:",
+        "antigravity": "antigravity",
+    }
+
     name_clean = app_name.strip().lower()
-    
+
+    for key, command in apps.items():
+        if key in name_clean:
+            try:
+                if key == "antigravity":
+                    path = _resolve_antigravity_path()
+                    if path:
+                        subprocess.Popen([path], shell=False)
+                        return True, "Antigravity launched successfully."
+                
+                subprocess.Popen(command, shell=True)
+                return True, f"{key.capitalize()} opened."
+            except Exception as e:
+                return False, f"Failed to open {key}: {e}"
+
     try:
-        if "antigravity" in name_clean:
-            path = _resolve_antigravity_path()
-            if path:
-                subprocess.Popen([path], shell=False)
-                return True, "Antigravity launched successfully."
-            else:
-                # Fallback to shell start
-                try:
-                    os.startfile("antigravity")
-                    return True, "Antigravity launched."
-                except Exception:
-                    return False, "Could not find Antigravity installation on the system."
-
-        elif "notepad" in name_clean or "note pad" in name_clean:
-            subprocess.Popen(["notepad.exe"], shell=False)
-            return True, "Notepad opened."
-
-        elif "calc" in name_clean or "calculator" in name_clean:
-            subprocess.Popen(["calc.exe"], shell=False)
-            return True, "Calculator opened."
-
-        elif "explorer" in name_clean or "files" in name_clean or "file manager" in name_clean:
-            subprocess.Popen(["explorer.exe"], shell=False)
-            return True, "File Explorer opened."
-
-        elif "terminal" in name_clean or "powershell" in name_clean or "command prompt" in name_clean:
-            subprocess.Popen(["powershell.exe"], shell=False)
-            return True, "PowerShell terminal launched."
-
-        else:
-            # Attempt to launch via Windows start command
-            os.startfile(app_name)
-            return True, f"Launched {app_name}."
-
+        os.startfile(app_name)
+        return True, f"Launched {app_name}."
     except Exception as exc:
         return False, f"Failed to launch {app_name}: {exc}"
+
+
+# Alias for backward compatibility
+launch_app = open_application
 
 
 def handle_system_command(text: str) -> Tuple[bool, str]:
@@ -143,15 +137,11 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     launch_triggers = ["open", "launch", "start", "run"]
     for trigger in launch_triggers:
         if trigger in lower_text:
-            if "antigravity" in lower_text:
-                success, msg = launch_app("antigravity")
-                return True, msg
-            if "notepad" in lower_text:
-                success, msg = launch_app("notepad")
-                return True, msg
-            if "calc" in lower_text or "calculator" in lower_text:
-                success, msg = launch_app("calculator")
-                return True, msg
+            apps_keywords = ["spotify", "notepad", "calculator", "calc", "antigravity"]
+            for app in apps_keywords:
+                if app in lower_text:
+                    success, msg = open_application(app)
+                    return True, msg
 
     return False, ""
 
@@ -160,4 +150,6 @@ if __name__ == "__main__":
     print("Testing system stats:")
     stats = get_system_stats()
     print(stats["summary"])
-    print("\nStats data:", stats)
+    print("\nTesting Spotify launcher definition:")
+    res, msg = open_application("spotify")
+    print(res, msg)

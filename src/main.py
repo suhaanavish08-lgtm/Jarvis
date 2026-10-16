@@ -13,6 +13,11 @@ import pyttsx3
 import scipy.io.wavfile as wavfile
 import sounddevice as sd
 
+# Initialize pyttsx3 globally
+tts_engine = pyttsx3.init()
+tts_engine.setProperty("rate", 180)
+tts_engine.setProperty("volume", 0.9)
+
 try:
     import ollama
 except ImportError:
@@ -23,7 +28,17 @@ try:
 except ImportError:
     WhisperModel = None
 
-from tools.system_ctrl import handle_system_command, get_system_stats, launch_app
+from tools.system_ctrl import handle_system_command, get_system_stats, launch_app, open_application
+
+
+def speak(text: str):
+    """Print response to the terminal and speak out loud using pyttsx3."""
+    print(f"\n[Jarvis]: {text}\n")
+    try:
+        tts_engine.say(text)
+        tts_engine.runAndWait()
+    except Exception as e:
+        print(f"[TTS Error]: {e}")
 
 
 class VoiceAssistant:
@@ -31,21 +46,6 @@ class VoiceAssistant:
         self.model_name = model_name
         self.whisper_size = whisper_size
         self.conversation_history = []
-        
-        # Initialize TTS
-        try:
-            self.tts_engine = pyttsx3.init()
-            # Set speaking rate and volume
-            self.tts_engine.setProperty("rate", 180)
-            self.tts_engine.setProperty("volume", 0.9)
-            voices = self.tts_engine.getProperty("voices")
-            if voices:
-                self.tts_engine.setProperty("voice", voices[0].id)
-        except Exception as e:
-            print(f"[Warning] Failed to initialize pyttsx3: {e}")
-            self.tts_engine = None
-
-        # Faster-whisper model lazy loading
         self._whisper_model = None
 
     @property
@@ -62,14 +62,8 @@ class VoiceAssistant:
         return self._whisper_model
 
     def speak(self, text: str):
-        """Speak out text and print to console."""
-        print(f"\n[Jarvis]: {text}\n")
-        if self.tts_engine:
-            try:
-                self.tts_engine.say(text)
-                self.tts_engine.runAndWait()
-            except Exception as e:
-                print(f"[TTS Error]: {e}")
+        """Forward to global speak function."""
+        speak(text)
 
     def listen(self, duration: int = 5, sample_rate: int = 16000) -> Optional[str]:
         """Record audio from default microphone and transcribe via faster-whisper."""
@@ -124,11 +118,9 @@ class VoiceAssistant:
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
         except Exception as e:
-            # Fallback if jarvis model not created or Ollama server down
             error_msg = str(e)
             if "not found" in error_msg.lower():
                 try:
-                    # Attempt fallback to llama3.2 if available
                     response = ollama.chat(
                         model="llama3.2",
                         messages=self.conversation_history[-8:],
@@ -154,7 +146,7 @@ class VoiceAssistant:
             self.speak(system_reply)
             return True
 
-        # Otherwise query the Ollama model
+        # Otherwise query the Ollama model and speak out loud
         reply = self.query_ollama(user_text)
         self.speak(reply)
         return True
