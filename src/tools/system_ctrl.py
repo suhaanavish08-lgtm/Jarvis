@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 from typing import Dict, Any, Tuple, List
 import psutil
@@ -86,6 +87,11 @@ def open_application(app_name: str) -> Tuple[bool, str]:
         "spotify": "start spotify:",
         "spot if": "start spotify:",
         "antigravity": "antigravity",
+        "file explorer": "explorer.exe",
+        "windows explorer": "explorer.exe",
+        "explorer": "explorer.exe",
+        "settings": "start ms-settings:",
+        "brave": "start brave",
     }
 
     name_clean = app_name.strip().lower()
@@ -126,9 +132,18 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
             pyautogui.press("nexttrack")
             return True, "Skipped to next track on Spotify."
         elif act == "search":
-            encoded_query = urllib.parse.quote(query.strip())
-            os.system(f"start spotify:search:{encoded_query}")
-            return True, f"Searching Spotify for {query}."
+            os.system("start spotify:")
+            time.sleep(1.5)
+            pyautogui.hotkey("ctrl", "l")  # Focus search bar
+            time.sleep(0.5)
+            pyautogui.hotkey("ctrl", "a")
+            pyautogui.press("backspace")   # Clear old search
+            pyautogui.write(query)         # Type new song/artist
+            time.sleep(2.0)                # Wait for top result to load
+            pyautogui.press("tab")         # Move focus out of search bar
+            pyautogui.press("tab")         # Highlight the Top Result
+            pyautogui.press("enter")       # Press play
+            return True, f"Playing {query} on Spotify."
         else:
             return False, f"Unknown Spotify action: {action}"
     except Exception as exc:
@@ -240,11 +255,20 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     launch_triggers = ["open", "launch", "start", "run"]
     for trigger in launch_triggers:
         if trigger in lower_text:
-            apps_keywords = ["spotify", "spot if", "notepad", "calculator", "calc", "antigravity"]
+            apps_keywords = [
+                "file explorer", "windows explorer", "explorer", "settings", "brave",
+                "spotify", "spot if", "notepad", "calculator", "calc", "antigravity"
+            ]
             for app in apps_keywords:
                 if app in lower_text:
                     success, msg = open_application(app)
                     return True, msg
+
+            # If trigger is at start, try launching remainder as app name
+            remainder = lower_text[len(trigger):].strip()
+            if remainder:
+                success, msg = open_application(remainder)
+                return True, msg
 
     return False, ""
 
