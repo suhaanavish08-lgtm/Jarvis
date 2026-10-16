@@ -1,4 +1,4 @@
-"""Jarvis: Local AI Voice Assistant with Kokoro TTS, Whisper small.en, and Spotify control."""
+"""Jarvis: Local AI Voice Assistant with Kokoro TTS, Whisper large-v3-turbo, and Spotify control."""
 
 import argparse
 import io
@@ -35,34 +35,19 @@ from tools.system_ctrl import (
     TOOL_SCHEMAS,
 )
 
-# Patch np.load so kokoro_onnx can load voices.json seamlessly
-_original_np_load = np.load
-
-
-def _kokoro_np_load(file, *args, **kwargs):
-    if isinstance(file, (str, os.PathLike)) and str(file).endswith(".json"):
-        with open(file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return {k: np.array(v, dtype=np.float32) for k, v in data.items()}
-    return _original_np_load(file, *args, **kwargs)
-
-
-np.load = _kokoro_np_load
-
-
-# Configuration for Kokoro TTS (v0.19 model & voices.json)
+# Configuration for Kokoro TTS (v1.0 model & voices-v1.0.bin)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
-KOKORO_MODEL_FILE = "kokoro-v0_19.onnx"
-KOKORO_VOICES_FILE = "voices.json"
+KOKORO_MODEL_FILE = "kokoro-v1.0.onnx"
+KOKORO_VOICES_FILE = "voices-v1.0.bin"
 CHOSEN_VOICE = "am_michael"
 
-KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx"
-KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.json"
+KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 
 def ensure_kokoro_models(model_dir: str = MODELS_DIR) -> tuple[str, str]:
-    """Ensure Kokoro v0.19 ONNX model and voices.json exist in models/ using requests."""
+    """Ensure Kokoro v1.0 ONNX model and voices-v1.0.bin exist in models/ using requests."""
     os.makedirs(model_dir, exist_ok=True)
     model_path = os.path.join(model_dir, KOKORO_MODEL_FILE)
     voices_path = os.path.join(model_dir, KOKORO_VOICES_FILE)
@@ -95,14 +80,14 @@ _model_path, _voices_path = ensure_kokoro_models()
 kokoro = Kokoro(model_path=_model_path, voices_path=_voices_path)
 
 
-def speak(text: str, voice: str = "am_michael", speed: float = 1.2):
-    """Generate audio using Kokoro TTS with voice='am_michael' and speed=1.2, playing via sounddevice."""
+def speak(text: str, voice: str = "am_michael", speed: float = 1.1):
+    """Generate audio using Kokoro TTS with voice='am_michael' and speed=1.1, playing via sounddevice."""
     print(f"\n[Jarvis]: {text}\n")
     if not text.strip():
         return
     try:
         samples, sample_rate = kokoro.create(
-            text=text,
+            text,
             voice=voice,
             speed=speed,
             lang="en-us"
@@ -114,7 +99,7 @@ def speak(text: str, voice: str = "am_michael", speed: float = 1.2):
 
 
 class VoiceAssistant:
-    def __init__(self, model_name: str = "jarvis", whisper_size: str = "small.en", voice: str = "am_michael"):
+    def __init__(self, model_name: str = "jarvis", whisper_size: str = "large-v3-turbo", voice: str = "am_michael"):
         self.model_name = model_name
         self.whisper_size = whisper_size
         self.voice = voice
@@ -129,14 +114,14 @@ class VoiceAssistant:
             print(f"[Jarvis] Loading Whisper model ({self.whisper_size})...")
             self._whisper_model = WhisperModel(
                 self.whisper_size,
-                device="cpu",
+                device="auto",
                 compute_type="int8"
             )
         return self._whisper_model
 
     def speak(self, text: str):
-        """Forward to global speak function using chosen voice and 1.2x speed."""
-        speak(text, voice=self.voice, speed=1.2)
+        """Forward to global speak function using chosen voice and 1.1x speed."""
+        speak(text, voice=self.voice, speed=1.1)
 
     def listen(
         self,
@@ -309,11 +294,11 @@ class VoiceAssistant:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant (Kokoro TTS & Whisper small.en)")
+    parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant (Kokoro TTS & Whisper large-v3-turbo)")
     parser.add_argument("--cli", action="store_true", help="Run in text CLI mode instead of microphone voice loop")
     parser.add_argument("--model", type=str, default="jarvis", help="Ollama model name (default: jarvis)")
     parser.add_argument("--voice", type=str, default=CHOSEN_VOICE, help="Kokoro voice (default: am_michael)")
-    parser.add_argument("--whisper-size", type=str, default="small.en", help="Whisper model size (default: small.en)")
+    parser.add_argument("--whisper-size", type=str, default="large-v3-turbo", help="Whisper model size (default: large-v3-turbo)")
     parser.add_argument("--stats", action="store_true", help="Print system statistics and exit")
     args = parser.parse_args()
 
