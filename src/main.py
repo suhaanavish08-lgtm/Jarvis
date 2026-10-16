@@ -209,7 +209,7 @@ class VoiceAssistant:
         chunk_size: int = 1024,
         speech_threshold: float = 0.03,
         silence_threshold: float = 0.02,
-        silence_timeout: float = 1.5,
+        silence_timeout: float = 0.7,
         max_silent_time: float = 8.0,
         max_record_time: float = 15.0,
     ) -> Optional[str]:
@@ -447,7 +447,7 @@ class VoiceAssistant:
                             pass
 
                         # Play a short greeting
-                        self.speak("At your service, sir.")
+                        self.speak("Yes, sir.")
 
                         # Immediately trigger Whisper transcription function to listen for user command
                         user_text = self.listen()

@@ -88,6 +88,17 @@ class TestAppLaunching(unittest.TestCase):
         mock_os_system.assert_called_with("start ms-settings:")
         self.assertIn("Settings opened", msg)
 
+    @patch("os.system")
+    def test_explicit_targets_bluetooth(self, mock_os_system):
+        success, msg = open_application("bluetooth")
+        self.assertTrue(success)
+        mock_os_system.assert_called_with("start ms-settings:bluetooth")
+        self.assertIn("Bluetooth opened", msg)
+
+        success2, msg2 = open_application("bluetooth settings")
+        self.assertTrue(success2)
+        mock_os_system.assert_called_with("start ms-settings:bluetooth")
+
     @patch("subprocess.Popen")
     def test_explicit_targets_file_explorer(self, mock_popen):
         success, msg = open_application("file explorer")
@@ -185,17 +196,23 @@ class TestSpotifyControls(unittest.TestCase):
     @patch("tools.system_ctrl.is_spotify_running", return_value=True)
     @patch("os.system")
     @patch("time.sleep")
+    @patch("pyautogui.size", return_value=(1920, 1080))
+    @patch("pyautogui.doubleClick")
     @patch("pyautogui.hotkey")
     @patch("pyautogui.write")
     @patch("pyautogui.press")
-    def test_spotify_search_focus_and_keystrokes(self, mock_press, mock_write, mock_hotkey, mock_sleep, mock_os_system, mock_running):
-        success, msg = control_spotify("search", query="The Hills")
+    def test_spotify_search_focus_and_keystrokes(self, mock_press, mock_write, mock_hotkey, mock_double_click, mock_size, mock_sleep, mock_os_system, mock_running):
+        success, msg = control_spotify("search", query="play The Hills on spotify.")
         self.assertTrue(success)
         mock_os_system.assert_called_with("start spotify:")
-        mock_hotkey.assert_called_with("ctrl", "l")
+        mock_hotkey.assert_any_call("win", "up")
+        mock_press.assert_any_call("esc")
+        mock_hotkey.assert_any_call("ctrl", "l")
+        mock_hotkey.assert_any_call("ctrl", "a")
+        mock_press.assert_any_call("backspace")
         mock_write.assert_called_with("The Hills")
-        tab_calls = [c for c in mock_press.call_args_list if c == call("tab")]
-        self.assertEqual(len(tab_calls), 3)
+        mock_press.assert_any_call("enter")
+        mock_double_click.assert_called_with(x=768.0, y=432.0)
         self.assertIn("Playing The Hills on Spotify", msg)
 
     def test_spotify_unknown_action(self):
@@ -540,7 +557,7 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assistant.run_voice_loop()
 
         mock_model_cls.assert_called_with(wakeword_models=["hey_jarvis"])
-        mock_speak.assert_any_call("At your service, sir.")
+        mock_speak.assert_any_call("Yes, sir.")
         mock_listen.assert_called_once()
         mock_process.assert_called_with("Check system status")
 

@@ -2,6 +2,7 @@
 
 import ctypes
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -116,6 +117,8 @@ def open_application(app_name: str) -> Tuple[bool, str]:
     name_clean = app_name.strip().strip("'\"").strip().lower()
 
     apps = {
+        "bluetooth settings": "start ms-settings:bluetooth",
+        "bluetooth": "start ms-settings:bluetooth",
         "settings": "start ms-settings:",
         "file explorer": "explorer.exe",
         "windows explorer": "explorer.exe",
@@ -189,6 +192,7 @@ def is_spotify_running() -> bool:
 def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
     """Control Spotify playback or search for songs/artists with process and focus safeguards."""
     act = action.strip().lower()
+    clean_query = re.sub(r"(?i)\b(play|on spotify|spotify)\b", "", query).strip().replace(".", "").strip()
     try:
         # Safeguard: check if Spotify is running; if not, launch it and wait 2 seconds
         if not is_spotify_running():
@@ -205,20 +209,22 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
             pyautogui.press("prevtrack")
             return True, "Skipped to previous track on Spotify."
         elif act == "search":
-            # Bring Spotify window into focus
             os.system("start spotify:")
             time.sleep(1.5)
+            pyautogui.hotkey("win", "up")  # Maximize
+            time.sleep(0.5)
+            pyautogui.press("esc")
             pyautogui.hotkey("ctrl", "l")
             time.sleep(0.5)
-            pyautogui.write(query)
-            time.sleep(0.5)
-            pyautogui.press("enter")  # Submit the search
-            time.sleep(2.0)           # Wait for the results page to load
-            pyautogui.press("tab")    # Move focus out of the search bar
-            pyautogui.press("tab")    # Skip the clear button
-            pyautogui.press("tab")    # Highlight the Top Result
-            pyautogui.press("enter")  # Play the song
-            return True, f"Playing {query} on Spotify."
+            pyautogui.hotkey("ctrl", "a")
+            pyautogui.press("backspace")
+            pyautogui.write(clean_query)
+            time.sleep(1.0)
+            pyautogui.press("enter")
+            time.sleep(2.0)
+            screen_w, screen_h = pyautogui.size()
+            pyautogui.doubleClick(x=screen_w * 0.4, y=screen_h * 0.4)
+            return True, f"Playing {clean_query} on Spotify."
         else:
             return False, f"Unknown Spotify action: {action}"
     except Exception as exc:
@@ -646,7 +652,7 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
         if trigger in lower_text:
             apps_keywords = [
                 "file explorer", "windows explorer", "explorer", "task manager", "taskmgr",
-                "settings", "brave", "browser", "chrome", "firefox", "edge",
+                "bluetooth settings", "bluetooth", "settings", "brave", "browser", "chrome", "firefox", "edge",
                 "spotify", "spot if", "notepad", "calculator", "calc", "antigravity"
             ]
             for app in apps_keywords:
