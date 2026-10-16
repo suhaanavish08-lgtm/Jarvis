@@ -122,20 +122,54 @@ class VoiceAssistant:
         """Forward to global speak function using chosen voice."""
         speak(text, voice=self.voice)
 
-    def listen(self, duration: int = 5, sample_rate: int = 16000) -> Optional[str]:
-        """Record audio from default microphone and transcribe via faster-whisper."""
+    def listen(
+        self,
+        sample_rate: int = 16000,
+        chunk_size: int = 1024,
+        speech_threshold: float = 0.03,
+        silence_threshold: float = 0.02,
+        silence_timeout: float = 1.5,
+    ) -> Optional[str]:
+        """Record audio dynamically using InputStream and silence detection, then transcribe."""
         try:
-            print(f"[Listening for {duration} seconds... speak now]")
-            audio_data = sd.rec(
-                int(duration * sample_rate),
-                samplerate=sample_rate,
-                channels=1,
-                dtype="float32"
-            )
-            sd.wait()
-            print("[Transcribing audio...]")
+            print("[Listening for speech...]")
+            frames = []
+            pre_buffer = []
+            pre_buffer_max_chunks = int(0.3 * sample_rate / chunk_size)  # Keep ~300ms pre-speech
+            is_speaking = False
+            silence_start_time = None
 
-            # Convert to int16 for wav file format
+            with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32") as stream:
+                while True:
+                    chunk, _ = stream.read(chunk_size)
+                    volume = float(np.max(np.abs(chunk)))
+
+                    if not is_speaking:
+                        pre_buffer.append(chunk)
+                        if len(pre_buffer) > pre_buffer_max_chunks:
+                            pre_buffer.pop(0)
+
+                        if volume >= speech_threshold:
+                            is_speaking = True
+                            frames.extend(pre_buffer)
+                            frames.append(chunk)
+                            silence_start_time = None
+                            print("[Speech detected, recording...]")
+                    else:
+                        frames.append(chunk)
+                        if volume < silence_threshold:
+                            if silence_start_time is None:
+                                silence_start_time = time.time()
+                            elif time.time() - silence_start_time >= silence_timeout:
+                                break
+                        else:
+                            silence_start_time = None
+
+            if not frames:
+                return None
+
+            print("[Transcribing audio...]")
+            audio_data = np.concatenate(frames, axis=0)
             audio_int16 = (audio_data * 32767).astype(np.int16)
 
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
@@ -208,19 +242,19 @@ class VoiceAssistant:
         self.speak(reply)
         return True
 
-    def run_voice_loop(self, duration: int = 5):
-        """Continuously run the voice interaction loop."""
+    def run_voice_loop(self):
+        """Continuously run the voice interaction loop with dynamic silence detection."""
         self.speak("Jarvis is online and ready for commands.")
         try:
             while True:
-                user_text = self.listen(duration=duration)
+                user_text = self.listen()
                 if user_text:
                     print(f"[User]: {user_text}")
                     should_continue = self.process_input(user_text)
                     if not should_continue:
                         break
                 else:
-                    time.sleep(0.5)
+                    time.sleep(0.1)
         except KeyboardInterrupt:
             self.speak("Jarvis paused. Goodbye.")
 
@@ -244,7 +278,6 @@ def main():
     parser.add_argument("--cli", action="store_true", help="Run in text CLI mode instead of microphone voice loop")
     parser.add_argument("--model", type=str, default="jarvis", help="Ollama model name (default: jarvis)")
     parser.add_argument("--voice", type=str, default=CHOSEN_VOICE, help="Kokoro voice (default: am_michael)")
-    parser.add_argument("--listen-duration", type=int, default=5, help="Audio record duration in seconds")
     parser.add_argument("--stats", action="store_true", help="Print system statistics and exit")
     args = parser.parse_args()
 
@@ -258,7 +291,7 @@ def main():
     if args.cli:
         assistant.run_cli_loop()
     else:
-        assistant.run_voice_loop(duration=args.listen_duration)
+        assistant.run_voice_loop()
 
 
 if __name__ == "__main__":
