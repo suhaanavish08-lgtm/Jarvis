@@ -79,40 +79,48 @@ def _resolve_antigravity_path() -> str | None:
 
 
 def open_application(app_name: str) -> Tuple[bool, str]:
-    """Launch designated applications using apps dictionary."""
+    """Launch designated applications via dictionary mapping or universal Windows Start Search fallback."""
     apps = {
-        "notepad": "notepad.exe",
-        "calculator": "calc.exe",
-        "calc": "calc.exe",
-        "spotify": "start spotify:",
-        "spot if": "start spotify:",
-        "antigravity": "antigravity",
+        "settings": "start ms-settings:",
         "file explorer": "explorer.exe",
         "windows explorer": "explorer.exe",
         "explorer": "explorer.exe",
-        "settings": "start ms-settings:",
+        "spotify": "start spotify:",
+        "spot if": "start spotify:",
+        "antigravity": "agy-ide",
+        "notepad": "notepad.exe",
+        "calculator": "calc.exe",
+        "calc": "calc.exe",
         "brave": "start brave",
     }
 
     name_clean = app_name.strip().lower()
 
-    for key, command in apps.items():
+    for key, cmd in apps.items():
         if key in name_clean:
             try:
-                if key == "antigravity":
-                    path = _resolve_antigravity_path()
-                    if path:
-                        subprocess.Popen([path], shell=False)
+                if key == "antigravity" or cmd == "agy-ide":
+                    resolved = _resolve_antigravity_path()
+                    if resolved:
+                        subprocess.Popen([resolved], shell=False)
                         return True, "Antigravity launched successfully."
-                
-                subprocess.Popen(command, shell=True)
+
+                if cmd.startswith("start "):
+                    os.system(cmd)
+                else:
+                    subprocess.Popen(cmd, shell=True)
                 return True, f"{key.capitalize()} opened."
             except Exception as e:
                 return False, f"Failed to open {key}: {e}"
 
+    # Fallback to Windows Start Menu search
     try:
-        os.startfile(app_name)
-        return True, f"Launched {app_name}."
+        pyautogui.press("win")
+        time.sleep(0.5)
+        pyautogui.write(app_name)
+        time.sleep(1.0)
+        pyautogui.press("enter")
+        return True, f"Launching {app_name} via Windows search."
     except Exception as exc:
         return False, f"Failed to launch {app_name}: {exc}"
 
