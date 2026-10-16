@@ -142,15 +142,16 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
         elif act == "search":
             os.system("start spotify:")
             time.sleep(1.5)
-            pyautogui.hotkey("ctrl", "l")  # Focus search bar
+            pyautogui.hotkey("ctrl", "l")
             time.sleep(0.5)
-            pyautogui.hotkey("ctrl", "a")
-            pyautogui.press("backspace")   # Clear old search
-            pyautogui.write(query)         # Type new song/artist
-            time.sleep(2.0)                # Wait for top result to load
-            pyautogui.press("tab")         # Move focus out of search bar
-            pyautogui.press("tab")         # Highlight the Top Result
-            pyautogui.press("enter")       # Press play
+            pyautogui.write(query)
+            time.sleep(0.5)
+            pyautogui.press("enter")  # Submit the search
+            time.sleep(2.0)           # Wait for the results page to load
+            pyautogui.press("tab")    # Move focus out of the search bar
+            pyautogui.press("tab")    # Skip the clear button
+            pyautogui.press("tab")    # Highlight the Top Result
+            pyautogui.press("enter")  # Play the song
             return True, f"Playing {query} on Spotify."
         else:
             return False, f"Unknown Spotify action: {action}"
