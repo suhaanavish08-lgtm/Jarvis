@@ -152,7 +152,7 @@ class TestAppLaunching(unittest.TestCase):
     def test_windows_search_fallback_winerror_resilience(self, mock_press):
         success, msg = open_application("nonexistent_binary")
         self.assertFalse(success)
-        self.assertIn("Failed to launch nonexistent_binary", msg)
+        self.assertEqual(msg, "Unable to complete the request, sir.")
 
 
 class TestSpotifyControls(unittest.TestCase):

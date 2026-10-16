@@ -297,12 +297,14 @@ class VoiceAssistant:
 
         except Exception as exc:
             print(f"[Audio Error]: {exc}")
+            self.speak("I encountered an error, sir.")
             return None
 
     def query_ollama(self, user_prompt: str) -> str:
         """Send prompt to Ollama running the local jarvis model with safe tool calling support."""
         if not ollama:
-            return "Ollama library is not installed in the environment."
+            print("[Debug Error]: Ollama library is not installed in the environment.")
+            return "I encountered an error, sir."
 
         clean_prompt = user_prompt.strip()
         if not clean_prompt:
@@ -327,7 +329,8 @@ class VoiceAssistant:
                     if isinstance(fn_args, str):
                         try:
                             fn_args = json.loads(fn_args)
-                        except Exception:
+                        except Exception as e:
+                            print(f"[Debug Error - Tool Args]: {e}")
                             fn_args = {}
 
                     if fn_name == "control_spotify":
@@ -367,7 +370,8 @@ class VoiceAssistant:
 
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
-        except Exception:
+        except Exception as exc:
+            print(f"[Debug Error - Ollama Tool Chat]: {exc}")
             # Fallback to direct chat without tools
             try:
                 response = ollama.chat(
@@ -379,8 +383,9 @@ class VoiceAssistant:
                     reply = "At your service, sir."
                 self.conversation_history.append({"role": "assistant", "content": reply})
                 return reply
-            except Exception as exc:
-                return f"Ollama connection error: {exc}. Please ensure the service is running, sir."
+            except Exception as e:
+                print(f"[Debug Error - Ollama Direct Chat]: {e}")
+                return "I encountered an error, sir."
 
     def process_input(self, user_text: Optional[str]) -> bool:
         """Process transcribed or typed input. Returns False if user requested exit."""

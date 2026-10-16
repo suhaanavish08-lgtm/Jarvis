@@ -21,10 +21,6 @@ def get_system_stats() -> Dict[str, Any]:
     """Retrieve current system resource statistics (CPU, RAM, Disk, Battery) safely."""
     try:
         cpu_percent = psutil.cpu_percent(interval=0.2)
-    except Exception:
-        cpu_percent = 0.0
-
-    try:
         virtual_mem = psutil.virtual_memory()
         mem_stats = {
             "total_gb": round(virtual_mem.total / (1024 ** 3), 2),
@@ -32,15 +28,7 @@ def get_system_stats() -> Dict[str, Any]:
             "free_gb": round(virtual_mem.available / (1024 ** 3), 2),
             "percent": virtual_mem.percent,
         }
-    except Exception:
-        mem_stats = {
-            "total_gb": 0.0,
-            "used_gb": 0.0,
-            "free_gb": 0.0,
-            "percent": 0.0,
-        }
 
-    try:
         system_drive = os.getenv("SystemDrive", "C:") + "\\"
         disk = psutil.disk_usage(system_drive)
         disk_stats = {
@@ -49,45 +37,47 @@ def get_system_stats() -> Dict[str, Any]:
             "free_gb": round(disk.free / (1024 ** 3), 2),
             "percent": disk.percent,
         }
-    except Exception:
-        disk_stats = {
-            "drive": "C:\\",
-            "total_gb": 0.0,
-            "free_gb": 0.0,
-            "percent": 0.0,
+
+        battery_info = None
+        try:
+            battery = psutil.sensors_battery()
+            if battery:
+                battery_info = {
+                    "percent": round(battery.percent, 1),
+                    "power_plugged": battery.power_plugged,
+                }
+        except Exception:
+            battery_info = None
+
+        stats = {
+            "cpu_percent": cpu_percent,
+            "memory": mem_stats,
+            "disk": disk_stats,
+            "battery": battery_info,
         }
 
-    battery_info = None
-    try:
-        battery = psutil.sensors_battery()
-        if battery:
-            battery_info = {
-                "percent": round(battery.percent, 1),
-                "power_plugged": battery.power_plugged,
-            }
-    except Exception:
-        battery_info = None
+        summary = (
+            f"CPU is running at {stats['cpu_percent']}%. "
+            f"Memory usage is at {stats['memory']['percent']}% with {stats['memory']['free_gb']} GB available. "
+            f"Disk {stats['disk']['drive']} has {stats['disk']['free_gb']} GB free."
+        )
+        if battery_info:
+            plugged_str = "charging" if battery_info["power_plugged"] else "on battery"
+            summary += f" Battery is at {battery_info['percent']}% ({plugged_str})."
+        else:
+            summary += " Running on AC power or battery status unavailable."
 
-    stats = {
-        "cpu_percent": cpu_percent,
-        "memory": mem_stats,
-        "disk": disk_stats,
-        "battery": battery_info,
-    }
-
-    summary = (
-        f"CPU is running at {stats['cpu_percent']}%. "
-        f"Memory usage is at {stats['memory']['percent']}% with {stats['memory']['free_gb']} GB available. "
-        f"Disk {stats['disk']['drive']} has {stats['disk']['free_gb']} GB free."
-    )
-    if battery_info:
-        plugged_str = "charging" if battery_info["power_plugged"] else "on battery"
-        summary += f" Battery is at {battery_info['percent']}% ({plugged_str})."
-    else:
-        summary += " Running on AC power or battery status unavailable."
-
-    stats["summary"] = summary
-    return stats
+        stats["summary"] = summary
+        return stats
+    except Exception as e:
+        print(f"[Debug Error]: {e}")
+        return {
+            "cpu_percent": 0.0,
+            "memory": {"total_gb": 0.0, "used_gb": 0.0, "free_gb": 0.0, "percent": 0.0},
+            "disk": {"drive": "C:\\", "total_gb": 0.0, "free_gb": 0.0, "percent": 0.0},
+            "battery": None,
+            "summary": "Unable to complete the request, sir.",
+        }
 
 
 def _resolve_antigravity_path() -> str | None:
@@ -110,39 +100,39 @@ def _resolve_antigravity_path() -> str | None:
 
 def open_application(app_name: str) -> Tuple[bool, str]:
     """Launch designated applications via dictionary mapping or universal Windows Start Search fallback."""
-    if not app_name or not app_name.strip():
-        return False, "Application name cannot be empty."
+    try:
+        if not app_name or not app_name.strip():
+            return False, "Application name cannot be empty."
 
-    # Normalize name: strip quotes, whitespace, and convert to lower case
-    name_clean = app_name.strip().strip("'\"").strip().lower()
+        # Normalize name: strip quotes, whitespace, and convert to lower case
+        name_clean = app_name.strip().strip("'\"").strip().lower()
 
-    apps = {
-        "bluetooth settings": "start ms-settings:bluetooth",
-        "bluetooth": "start ms-settings:bluetooth",
-        "settings": "start ms-settings:",
-        "file explorer": "explorer.exe",
-        "windows explorer": "explorer.exe",
-        "explorer": "explorer.exe",
-        "task manager": "taskmgr.exe",
-        "taskmgr": "taskmgr.exe",
-        "calculator": "calc.exe",
-        "calc": "calc.exe",
-        "notepad": "notepad.exe",
-        "spotify": "start spotify:",
-        "spot if": "start spotify:",
-        "antigravity": "agy-ide",
-        "browser": "start https://www.google.com",
-        "default browser": "start https://www.google.com",
-        "chrome": "start chrome",
-        "msedge": "start msedge",
-        "edge": "start msedge",
-        "firefox": "start firefox",
-        "brave": "start brave",
-    }
+        apps = {
+            "bluetooth settings": "start ms-settings:bluetooth",
+            "bluetooth": "start ms-settings:bluetooth",
+            "settings": "start ms-settings:",
+            "file explorer": "explorer.exe",
+            "windows explorer": "explorer.exe",
+            "explorer": "explorer.exe",
+            "task manager": "taskmgr.exe",
+            "taskmgr": "taskmgr.exe",
+            "calculator": "calc.exe",
+            "calc": "calc.exe",
+            "notepad": "notepad.exe",
+            "spotify": "start spotify:",
+            "spot if": "start spotify:",
+            "antigravity": "agy-ide",
+            "browser": "start https://www.google.com",
+            "default browser": "start https://www.google.com",
+            "chrome": "start chrome",
+            "msedge": "start msedge",
+            "edge": "start msedge",
+            "firefox": "start firefox",
+            "brave": "start brave",
+        }
 
-    for key, cmd in apps.items():
-        if key in name_clean:
-            try:
+        for key, cmd in apps.items():
+            if key in name_clean:
                 if key == "antigravity" or cmd == "agy-ide":
                     resolved = _resolve_antigravity_path()
                     if resolved:
@@ -154,11 +144,8 @@ def open_application(app_name: str) -> Tuple[bool, str]:
                 else:
                     subprocess.Popen(cmd, shell=True)
                 return True, f"{key.capitalize()} opened."
-            except (OSError, Exception) as e:
-                return False, f"Failed to open {key}: {e}"
 
-    # Fallback to Windows Start Menu search
-    try:
+        # Fallback to Windows Start Menu search
         search_target = name_clean
         pyautogui.press("win")
         time.sleep(0.5)
@@ -166,8 +153,9 @@ def open_application(app_name: str) -> Tuple[bool, str]:
         time.sleep(1.0)
         pyautogui.press("enter")
         return True, f"Launching {search_target} via Windows search."
-    except (OSError, Exception) as exc:
-        return False, f"Failed to launch {app_name}: {exc}"
+    except Exception as e:
+        print(f"[Debug Error]: {e}")
+        return False, "Unable to complete the request, sir."
 
 
 # Alias for backward compatibility
@@ -191,9 +179,10 @@ def is_spotify_running() -> bool:
 
 def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
     """Control Spotify playback or search for songs/artists with process and focus safeguards."""
-    act = action.strip().lower()
-    clean_query = re.sub(r"(?i)\b(play|on spotify|spotify)\b", "", query).strip().replace(".", "").strip()
     try:
+        act = action.strip().lower()
+        clean_query = re.sub(r"(?i)\b(play|on spotify|spotify)\b", "", query).strip().replace(".", "").strip()
+
         # Safeguard: check if Spotify is running; if not, launch it and wait 2 seconds
         if not is_spotify_running():
             os.system("start spotify:")
@@ -227,8 +216,9 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
             return True, f"Playing {clean_query} on Spotify."
         else:
             return False, f"Unknown Spotify action: {action}"
-    except Exception as exc:
-        return False, f"Failed to control Spotify: {exc}"
+    except Exception as e:
+        print(f"[Debug Error]: {e}")
+        return False, "Unable to complete the request, sir."
 
 
 def run_powershell_command(command: str) -> str:
@@ -284,7 +274,8 @@ def run_powershell_command(command: str) -> str:
     except subprocess.TimeoutExpired:
         return "Command timed out after 10 seconds."
     except Exception as exc:
-        return f"Failed to execute PowerShell command: {exc}"
+        print(f"[Debug Error]: {exc}")
+        return "Unable to complete the request, sir."
 
 
 def search_web(query: str, max_results: int = 3) -> str:
@@ -312,7 +303,8 @@ def search_web(query: str, max_results: int = 3) -> str:
 
         return "\n".join(snippets)
     except Exception as exc:
-        return f"Web search failed: {exc}"
+        print(f"[Debug Error]: {exc}")
+        return "Unable to complete the request, sir."
 
 
 def manage_volume(action: str, value: int = 0) -> str:
@@ -350,7 +342,8 @@ def manage_volume(action: str, value: int = 0) -> str:
         else:
             return f"Unknown volume action '{action}'. Valid actions: 'mute', 'unmute', 'set', 'up', 'down'."
     except Exception as exc:
-        return f"Failed to adjust system volume: {exc}"
+        print(f"[Debug Error]: {exc}")
+        return "Unable to complete the request, sir."
 
 
 def capture_screen() -> str:
@@ -376,7 +369,8 @@ def capture_screen() -> str:
 
         return f"Screenshot captured successfully. Dimensions: {width}x{height} pixels. Saved temporarily at {temp_path}."
     except Exception as exc:
-        return f"Failed to capture screen: {exc}"
+        print(f"[Debug Error]: {exc}")
+        return "Unable to complete the request, sir."
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
@@ -418,7 +412,8 @@ def list_running_processes(limit: int = 10) -> str:
 
         return "\n".join(lines)
     except Exception as exc:
-        return f"Failed to list running processes: {exc}"
+        print(f"[Debug Error]: {exc}")
+        return "Unable to complete the request, sir."
 
 
 # Tool Schemas for Ollama / LLM Function Calling
