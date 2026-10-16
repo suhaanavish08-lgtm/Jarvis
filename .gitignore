@@ -1,0 +1,23 @@
+# Environments
+.venv/
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Models and memory storage
+models/
+memory/
+*.gguf
+*.bin
+*.onnx
+
+# Audio files
+*.wav
+*.mp3
+
+# Environment variables & secrets
+.env
