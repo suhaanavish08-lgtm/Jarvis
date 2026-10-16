@@ -23,7 +23,7 @@ try:
 except ImportError:
     WhisperModel = None
 
-from src.tools.system_ctrl import handle_system_command, get_system_stats, launch_app
+from tools.system_ctrl import handle_system_command, get_system_stats, launch_app
 
 
 class VoiceAssistant:
