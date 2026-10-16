@@ -40,7 +40,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 KOKORO_MODEL_FILE = "kokoro-v1.0.onnx"
 KOKORO_VOICES_FILE = "voices-v1.0.bin"
-CHOSEN_VOICE = "am_michael"
+CHOSEN_VOICE = "bm_daniel"
 
 KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
@@ -80,8 +80,8 @@ _model_path, _voices_path = ensure_kokoro_models()
 kokoro = Kokoro(model_path=_model_path, voices_path=_voices_path)
 
 
-def speak(text: str, voice: str = "am_michael", speed: float = 1.1):
-    """Generate audio using Kokoro TTS with voice='am_michael' and speed=1.1, playing via sounddevice."""
+def speak(text: str, voice: str = "bm_daniel", speed: float = 1.1):
+    """Generate audio using Kokoro TTS with voice='bm_daniel' and speed=1.1, playing via sounddevice."""
     print(f"\n[Jarvis]: {text}\n")
     if not text.strip():
         return
@@ -99,7 +99,7 @@ def speak(text: str, voice: str = "am_michael", speed: float = 1.1):
 
 
 class VoiceAssistant:
-    def __init__(self, model_name: str = "jarvis", whisper_size: str = "large-v3-turbo", voice: str = "am_michael"):
+    def __init__(self, model_name: str = "jarvis", whisper_size: str = "large-v3-turbo", voice: str = "bm_daniel"):
         self.model_name = model_name
         self.whisper_size = whisper_size
         self.voice = voice
@@ -297,7 +297,7 @@ def main():
     parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant (Kokoro TTS & Whisper large-v3-turbo)")
     parser.add_argument("--cli", action="store_true", help="Run in text CLI mode instead of microphone voice loop")
     parser.add_argument("--model", type=str, default="jarvis", help="Ollama model name (default: jarvis)")
-    parser.add_argument("--voice", type=str, default=CHOSEN_VOICE, help="Kokoro voice (default: am_michael)")
+    parser.add_argument("--voice", type=str, default=CHOSEN_VOICE, help="Kokoro voice (default: bm_daniel)")
     parser.add_argument("--whisper-size", type=str, default="large-v3-turbo", help="Whisper model size (default: large-v3-turbo)")
     parser.add_argument("--stats", action="store_true", help="Print system statistics and exit")
     args = parser.parse_args()
