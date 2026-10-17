@@ -10,6 +10,11 @@ import threading
 import time
 from typing import Optional, List, Tuple
 
+try:
+    import overlay
+except ImportError:
+    from src import overlay
+
 from faster_whisper import WhisperModel
 from kokoro_onnx import Kokoro
 import numpy as np
@@ -193,10 +198,20 @@ def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
     try:
         combined, sample_rate = synthesize_speech(text, voice=voice, speed=speed)
         if combined is not None and len(combined) > 0:
-            _playback_end_time = time.time() + (len(combined) / sample_rate)
+            duration = len(combined) / sample_rate
+            _playback_end_time = time.time() + duration
+            overlay.JARVIS_STATE = "speaking"
             sd.play(combined, sample_rate)
+
+            def _reset_speaking(d):
+                time.sleep(d)
+                if time.time() >= _playback_end_time:
+                    overlay.JARVIS_STATE = "idle"
+
+            threading.Thread(target=_reset_speaking, args=(duration,), daemon=True).start()
     except Exception as e:
         print(f"[Kokoro TTS Error]: {e}")
+        overlay.JARVIS_STATE = "idle"
 
 
 def listen(
@@ -212,6 +227,7 @@ def listen(
     global _playback_end_time
     effective_timeout = timeout if timeout is not None else max_silent_time
     print("[Listening for speech...]")
+    overlay.JARVIS_STATE = "listening"
 
     audio_chunks: List[np.ndarray] = []
     is_recording = False
@@ -283,6 +299,8 @@ def listen(
     except Exception as exc:
         print(f"[Audio Error]: {exc}")
         return None
+    finally:
+        overlay.JARVIS_STATE = "idle"
 
 
 class VoiceAssistant:
@@ -576,8 +594,14 @@ def main():
     if args.cli:
         assistant.run_cli_loop()
     else:
-        run_jarvis(assistant)
+        threading.Thread(target=run_jarvis, args=(assistant,), daemon=True).start()
+        overlay.root.mainloop()
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1:
+        main()
+    else:
+        threading.Thread(target=run_jarvis, daemon=True).start()
+        overlay.root.mainloop()
+

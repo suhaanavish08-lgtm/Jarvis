@@ -30,6 +30,7 @@ from tools.system_ctrl import (
     AVAILABLE_TOOLS,
 )
 import main
+import overlay
 from main import (
     chunk_text,
     synthesize_speech,
@@ -719,5 +720,49 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assertEqual(self.assistant.conversation_history[3]["content"], "You asked for my identity, sir.")
 
 
+class TestJarvisVisualOverlay(unittest.TestCase):
+    """Test top-center visual overlay state management and animation logic."""
+
+    def test_initial_state_idle(self):
+        self.assertIn(overlay.JARVIS_STATE, ["idle", "listening", "speaking"])
+        self.assertIsNotNone(overlay.root)
+        self.assertIsNotNone(overlay.canvas)
+        self.assertIsNotNone(overlay.orb)
+
+    def test_update_animation_idle_shrinks_orb(self):
+        overlay.JARVIS_STATE = "idle"
+        overlay.update_animation()
+        coords = overlay.canvas.coords(overlay.orb)
+        self.assertEqual(coords, [0.0, 0.0, 0.0, 0.0])
+
+    def test_update_animation_listening_expands_orb(self):
+        overlay.JARVIS_STATE = "listening"
+        overlay.update_animation()
+        coords = overlay.canvas.coords(overlay.orb)
+        self.assertEqual(len(coords), 4)
+        x1, y1, x2, y2 = coords
+        self.assertTrue(x2 > x1)
+        self.assertTrue(y2 > y1)
+
+    def test_update_animation_speaking_modulates_orb(self):
+        overlay.JARVIS_STATE = "speaking"
+        overlay.update_animation()
+        coords = overlay.canvas.coords(overlay.orb)
+        self.assertEqual(len(coords), 4)
+        x1, y1, x2, y2 = coords
+        self.assertTrue(x2 > x1)
+        self.assertTrue(y2 > y1)
+
+    def test_listen_sets_and_resets_overlay_state(self):
+        assistant = VoiceAssistant()
+        with patch("sounddevice.InputStream") as mock_stream_cls:
+            mock_stream = MagicMock()
+            mock_stream.read.return_value = (np.zeros(1024, dtype=np.int16), False)
+            mock_stream_cls.return_value.__enter__.return_value = mock_stream
+            assistant.listen(timeout=0.01)
+            self.assertEqual(overlay.JARVIS_STATE, "idle")
+
+
 if __name__ == "__main__":
     unittest.main()
+
