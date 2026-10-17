@@ -22,10 +22,12 @@ from tools.system_ctrl import (
     run_powershell_command,
     search_web,
     manage_volume,
+    manage_brightness,
     capture_screen,
     list_running_processes,
     handle_system_command,
     TOOL_SCHEMAS,
+    AVAILABLE_TOOLS,
 )
 import main
 from main import (
@@ -298,16 +300,36 @@ class TestOmniTools(unittest.TestCase):
         self.assertEqual(result, "Search query cannot be empty.")
 
     @patch("pyautogui.press")
-    def test_manage_volume_mute_unmute_and_set(self, mock_press):
+    def test_manage_volume(self, mock_press):
         msg_mute = manage_volume("mute")
         mock_press.assert_called_with("volumemute")
         self.assertIn("muted", msg_mute.lower())
 
         msg_unmute = manage_volume("unmute")
+        mock_press.assert_called_with("volumemute")
         self.assertIn("unmuted", msg_unmute.lower())
 
-        msg_set = manage_volume("set", value=50)
-        self.assertIn("50%", msg_set)
+        msg_up = manage_volume("up")
+        mock_press.assert_called_with("volumeup", presses=5)
+        self.assertIn("increased", msg_up.lower())
+
+        msg_down = manage_volume("down")
+        mock_press.assert_called_with("volumedown", presses=5)
+        self.assertIn("decreased", msg_down.lower())
+
+    @patch("screen_brightness_control.set_brightness")
+    def test_manage_brightness(self, mock_sbc):
+        msg_up = manage_brightness("up")
+        mock_sbc.assert_called_with("+10")
+        self.assertIn("increased", msg_up.lower())
+
+        msg_down = manage_brightness("down")
+        mock_sbc.assert_called_with("-10")
+        self.assertIn("decreased", msg_down.lower())
+
+        mock_sbc.side_effect = Exception("Display error")
+        msg_err = manage_brightness("up")
+        self.assertIn("unable", msg_err.lower())
 
     def test_capture_screen(self):
         result = capture_screen()
@@ -461,6 +483,29 @@ class TestLLMToolCalling(unittest.TestCase):
         reply = self.assistant.query_ollama("Mute the sound")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("muted", reply.lower())
+
+    @patch("ollama.chat")
+    @patch("screen_brightness_control.set_brightness")
+    def test_tool_calling_manage_brightness(self, mock_sbc, mock_ollama_chat):
+        mock_ollama_chat.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "manage_brightness",
+                            "arguments": {"action": "up"}
+                        }
+                    }
+                ]
+            }
+        }
+
+        reply = self.assistant.query_ollama("Increase brightness")
+        mock_sbc.assert_called_with("+10")
+        self.assertIn("Certainly, sir", reply)
+        self.assertIn("increased", reply.lower())
 
     @patch("ollama.chat")
     def test_tool_calling_capture_screen(self, mock_ollama_chat):

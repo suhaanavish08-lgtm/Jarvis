@@ -12,3 +12,4 @@ pyautogui
 openwakeword
 duckduckgo-search
 pillow
+screen-brightness-control

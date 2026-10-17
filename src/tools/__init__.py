@@ -8,10 +8,12 @@ from .system_ctrl import (
     run_powershell_command,
     search_web,
     manage_volume,
+    manage_brightness,
     capture_screen,
     list_running_processes,
     handle_system_command,
     TOOL_SCHEMAS,
+    AVAILABLE_TOOLS,
 )
 
 __all__ = [
@@ -23,8 +25,10 @@ __all__ = [
     "run_powershell_command",
     "search_web",
     "manage_volume",
+    "manage_brightness",
     "capture_screen",
     "list_running_processes",
     "handle_system_command",
     "TOOL_SCHEMAS",
+    "AVAILABLE_TOOLS",
 ]

@@ -38,6 +38,7 @@ from tools.system_ctrl import (
     run_powershell_command,
     search_web,
     manage_volume,
+    manage_brightness,
     capture_screen,
     list_running_processes,
     TOOL_SCHEMAS,
@@ -332,8 +333,11 @@ class VoiceAssistant:
                         search_out = search_web(query=fn_args.get("query", ""), max_results=int(fn_args.get("max_results", 3)))
                         tool_replies.append(search_out)
                     elif fn_name == "manage_volume":
-                        vol_out = manage_volume(action=fn_args.get("action", "mute"), value=int(fn_args.get("value", 0)))
+                        vol_out = manage_volume(action=fn_args.get("action", "mute"))
                         tool_replies.append(vol_out)
+                    elif fn_name == "manage_brightness":
+                        bright_out = manage_brightness(action=fn_args.get("action", "up"))
+                        tool_replies.append(bright_out)
                     elif fn_name == "capture_screen":
                         screen_out = capture_screen()
                         tool_replies.append(screen_out)

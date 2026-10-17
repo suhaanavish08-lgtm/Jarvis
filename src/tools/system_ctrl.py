@@ -13,6 +13,7 @@ from typing import Dict, Any, Tuple, List, Optional
 from PIL import Image, ImageGrab
 import psutil
 import pyautogui
+import screen_brightness_control as sbc
 
 pyautogui.FAILSAFE = False
 
@@ -308,43 +309,48 @@ def search_web(query: str, max_results: int = 3) -> str:
         return "Unable to complete the request, sir."
 
 
-def manage_volume(action: str, value: int = 0) -> str:
-    """Control system audio (mute, unmute, set volume level, up, down)."""
+def manage_volume(action: str) -> str:
+    """Control Windows system audio volume (up, down, mute)."""
     act = action.strip().lower()
     try:
-        if act == "mute":
+        if act in ["up", "increase"]:
+            pyautogui.press("volumeup", presses=5)
+            return "System volume increased."
+        elif act in ["down", "decrease"]:
+            pyautogui.press("volumedown", presses=5)
+            return "System volume decreased."
+        elif act == "mute":
             pyautogui.press("volumemute")
             return "System audio muted."
         elif act == "unmute":
-            # Toggle or step to restore sound
-            pyautogui.press("volumeup")
-            pyautogui.press("volumedown")
+            pyautogui.press("volumemute")
             return "System audio unmuted."
-        elif act in ["set", "set_volume", "volume"]:
-            val = max(0, min(100, int(value)))
-            # Reset to zero
-            for _ in range(50):
-                pyautogui.press("volumedown")
-            # Step up to desired level (each step ~2%)
-            steps = val // 2
-            for _ in range(steps):
-                pyautogui.press("volumeup")
-            return f"System volume set to approximately {val}%."
-        elif act in ["up", "increase"]:
-            steps = max(1, int(value)) if value > 0 else 5
-            for _ in range(steps):
-                pyautogui.press("volumeup")
-            return "System volume increased."
-        elif act in ["down", "decrease"]:
-            steps = max(1, int(value)) if value > 0 else 5
-            for _ in range(steps):
-                pyautogui.press("volumedown")
-            return "System volume decreased."
         else:
-            return f"Unknown volume action '{action}'. Valid actions: 'mute', 'unmute', 'set', 'up', 'down'."
+            return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute'."
     except Exception as exc:
         print(f"[Debug Error]: {exc}")
         return "Unable to complete the request, sir."
+
+
+def manage_brightness(action: str) -> str:
+    """Control display brightness in 10-unit steps (up, down, mute)."""
+    act = action.strip().lower()
+    try:
+        if act in ["up", "increase"]:
+            sbc.set_brightness("+10")
+            return "Screen brightness increased."
+        elif act in ["down", "decrease"]:
+            sbc.set_brightness("-10")
+            return "Screen brightness decreased."
+        elif act == "mute":
+            sbc.set_brightness(0)
+            return "Screen brightness muted."
+        else:
+            return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down', 'mute'."
+    except Exception as exc:
+        print(f"[Debug Error]: {exc}")
+        return "Unable to adjust brightness, sir."
+
 
 
 def capture_screen() -> str:
@@ -511,18 +517,32 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_volume",
-            "description": "Control Windows system audio volume (mute, unmute, set level from 0 to 100, up, down).",
+            "description": "Control Windows system audio volume. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["mute", "unmute", "set", "up", "down"],
-                        "description": "Audio action to perform: 'mute', 'unmute', 'set', 'up', or 'down'."
-                    },
-                    "value": {
-                        "type": "integer",
-                        "description": "Volume percentage level (0-100) when action is 'set', or step count."
+                        "enum": ["up", "down", "mute"],
+                        "description": "Audio action to perform. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs."
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_brightness",
+            "description": "Control screen brightness in safe 10-unit steps. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["up", "down", "mute"],
+                        "description": "Brightness action to perform. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs."
                     }
                 },
                 "required": ["action"]
@@ -557,6 +577,18 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         }
     }
 ]
+
+AVAILABLE_TOOLS: Dict[str, Any] = {
+    "control_spotify": control_spotify,
+    "get_system_stats": get_system_stats,
+    "open_application": open_application,
+    "run_powershell_command": run_powershell_command,
+    "search_web": search_web,
+    "manage_volume": manage_volume,
+    "manage_brightness": manage_brightness,
+    "capture_screen": capture_screen,
+    "list_running_processes": list_running_processes,
+}
 
 
 def handle_system_command(text: str) -> Tuple[bool, str]:
@@ -600,6 +632,13 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
         return True, manage_volume("up")
     if "volume down" in lower_text or "turn down volume" in lower_text:
         return True, manage_volume("down")
+
+    # Brightness keywords
+    if "brightness up" in lower_text or "turn up brightness" in lower_text or "increase brightness" in lower_text:
+        return True, manage_brightness("up")
+    if "brightness down" in lower_text or "turn down brightness" in lower_text or "decrease brightness" in lower_text:
+        return True, manage_brightness("down")
+
 
     # Spotify Play/Pause keywords
     playpause_triggers = [
