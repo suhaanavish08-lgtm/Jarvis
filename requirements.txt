@@ -1,5 +1,5 @@
 ollama
-faster-whisper
+moonshine-voice
 sounddevice
 scipy
 numpy
