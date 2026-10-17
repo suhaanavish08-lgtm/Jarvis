@@ -164,16 +164,36 @@ def synthesize_speech(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1) 
     return combined, sample_rate
 
 
+_playback_end_time = 0.0
+
+
+def is_audio_playing() -> bool:
+    """Check if sounddevice audio playback is currently active."""
+    global _playback_end_time
+    try:
+        stream = sd.get_stream()
+        if stream is not None:
+            active = getattr(stream, "active", False)
+            if active is True:
+                return True
+            if hasattr(active, "_mock_return_value") or hasattr(active, "_mock_wraps"):
+                return bool(active)
+    except Exception:
+        pass
+    return time.time() < _playback_end_time
+
+
 def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
-    """Generate and play audio using Kokoro TTS with sentence chunking and sounddevice."""
+    """Generate and play audio non-blockingly using Kokoro TTS and sounddevice."""
+    global _playback_end_time
     print(f"\n[Jarvis]: {text}\n")
     if not text or not text.strip():
         return
     try:
         combined, sample_rate = synthesize_speech(text, voice=voice, speed=speed)
         if combined is not None and len(combined) > 0:
+            _playback_end_time = time.time() + (len(combined) / sample_rate)
             sd.play(combined, sample_rate)
-            sd.wait()
     except Exception as e:
         print(f"[Kokoro TTS Error]: {e}")
 
@@ -184,6 +204,7 @@ class VoiceAssistant:
         self.whisper_size = whisper_size
         self.voice = voice
         self.conversation_history = []
+        self.messages = self.conversation_history
         self._whisper_model = None
 
     @property
@@ -214,6 +235,7 @@ class VoiceAssistant:
         max_record_time: float = 15.0,
     ) -> Optional[str]:
         """Record audio dynamically with silence detection, clipping protection, and disconnection resilience."""
+        global _playback_end_time
         try:
             print("[Listening for speech...]")
             frames = []
@@ -234,6 +256,17 @@ class VoiceAssistant:
                         # Guard against clipping wrap-around
                         chunk = np.clip(chunk, -1.0, 1.0)
                         volume = float(np.max(np.abs(chunk)))
+
+                        # Voice Interruption (Barge-in):
+                        # If volume spikes above speech threshold while audio is playing,
+                        # immediately call sd.stop() to cut Jarvis off and seamlessly begin recording interruption.
+                        if is_audio_playing() and volume >= speech_threshold:
+                            print("[Interruption detected! Stopping speech playback...]")
+                            try:
+                                sd.stop()
+                            except Exception:
+                                pass
+                            _playback_end_time = 0.0
 
                         if not is_speaking:
                             pre_buffer.append(chunk)
@@ -427,6 +460,8 @@ class VoiceAssistant:
         chunk_size = 1280  # 80ms audio chunk at 16kHz for openwakeword
         sample_rate = 16000
 
+        messages = self.conversation_history  # Persistent context outside and above while True loop
+
         try:
             with sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16") as stream:
                 while True:
@@ -472,6 +507,9 @@ class VoiceAssistant:
         except KeyboardInterrupt:
             self.speak("Jarvis paused. Goodbye.")
 
+    # Method alias on VoiceAssistant
+    run_jarvis = run_voice_loop
+
     def run_cli_loop(self):
         """Interactive text CLI mode for testing without microphone."""
         self.speak("Jarvis CLI mode initialized.")
@@ -485,6 +523,25 @@ class VoiceAssistant:
                     break
         except (KeyboardInterrupt, EOFError):
             self.speak("Jarvis shutting down. Goodbye.")
+
+
+def run_jarvis(assistant: Optional[VoiceAssistant] = None):
+    """Run the main Jarvis voice assistant loop with persistent conversation history across turns."""
+    if assistant is None:
+        assistant = VoiceAssistant()
+        # Move messages array initialization outside and above while True loop for persistent context
+        messages = []
+        assistant.conversation_history = messages
+    else:
+        messages = assistant.conversation_history
+    assistant.messages = messages
+
+    while True:
+        try:
+            return assistant.run_voice_loop()
+        except KeyboardInterrupt:
+            assistant.speak("Jarvis paused. Goodbye.")
+            break
 
 
 def main():
@@ -506,7 +563,7 @@ def main():
     if args.cli:
         assistant.run_cli_loop()
     else:
-        assistant.run_voice_loop()
+        run_jarvis(assistant)
 
 
 if __name__ == "__main__":

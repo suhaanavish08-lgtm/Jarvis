@@ -33,6 +33,8 @@ from main import (
     synthesize_speech,
     speak,
     VoiceAssistant,
+    run_jarvis,
+    is_audio_playing,
     MODELS_DIR,
     KOKORO_MODEL_FILE,
     KOKORO_VOICES_FILE,
@@ -212,7 +214,7 @@ class TestSpotifyControls(unittest.TestCase):
         mock_press.assert_any_call("backspace")
         mock_write.assert_called_with("The Hills")
         mock_press.assert_any_call("enter")
-        mock_double_click.assert_called_with(x=768.0, y=432.0)
+        mock_double_click.assert_called_with(x=480.0, y=486.0)
         self.assertIn("Playing The Hills on Spotify", msg)
 
     def test_spotify_unknown_action(self):
@@ -258,7 +260,7 @@ class TestKokoroTTSEngine(unittest.TestCase):
     def test_speak_invocation(self, mock_wait, mock_play):
         speak("At your service, sir.")
         mock_play.assert_called_once()
-        mock_wait.assert_called_once()
+        mock_wait.assert_not_called()
 
 
 class TestOmniTools(unittest.TestCase):
@@ -560,6 +562,56 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         mock_speak.assert_any_call("Yes, sir.")
         mock_listen.assert_called_once()
         mock_process.assert_called_with("Check system status")
+
+    @patch("main.is_audio_playing", return_value=True)
+    @patch("sounddevice.stop")
+    @patch("sounddevice.InputStream")
+    def test_barge_in_interruption_stops_playback(self, mock_stream, mock_stop, mock_is_playing):
+        mock_stream_instance = MagicMock()
+        speech_chunk = np.ones((1024, 1), dtype=np.float32) * 0.1
+        silent_chunk = np.zeros((1024, 1), dtype=np.float32)
+
+        mock_stream_instance.read.side_effect = [
+            (speech_chunk, False),
+            (silent_chunk, False),
+            (None, False),
+        ]
+        mock_stream.return_value.__enter__.return_value = mock_stream_instance
+
+        with patch.object(self.assistant, "_whisper_model") as mock_whisper:
+            segment_mock = MagicMock()
+            segment_mock.text = "Stop talking and open Spotify"
+            mock_whisper.transcribe.return_value = ([segment_mock], None)
+
+            result = self.assistant.listen(silence_timeout=0.01)
+
+            mock_stop.assert_called()
+            self.assertEqual(result, "Stop talking and open Spotify")
+
+    @patch("ollama.chat")
+    def test_persistent_context_follow_up_turns(self, mock_ollama_chat):
+        mock_ollama_chat.side_effect = [
+            {"message": {"role": "assistant", "content": "I am Jarvis, sir."}},
+            {"message": {"role": "assistant", "content": "You asked for my identity, sir."}},
+        ]
+
+        reply1 = self.assistant.query_ollama("Who are you?")
+        self.assertEqual(reply1, "I am Jarvis, sir.")
+
+        reply2 = self.assistant.query_ollama("What did I just ask?")
+        self.assertEqual(reply2, "You asked for my identity, sir.")
+
+        self.assertEqual(len(self.assistant.conversation_history), 4)
+        self.assertEqual(self.assistant.conversation_history[0]["content"], "Who are you?")
+        self.assertEqual(self.assistant.conversation_history[1]["content"], "I am Jarvis, sir.")
+        self.assertEqual(self.assistant.conversation_history[2]["content"], "What did I just ask?")
+        self.assertEqual(self.assistant.conversation_history[3]["content"], "You asked for my identity, sir.")
+
+    @patch.object(VoiceAssistant, "run_voice_loop")
+    def test_run_jarvis_entrypoint_initializes_context(self, mock_loop):
+        run_jarvis(self.assistant)
+        mock_loop.assert_called_once()
+        self.assertIs(self.assistant.messages, self.assistant.conversation_history)
 
 
 if __name__ == "__main__":

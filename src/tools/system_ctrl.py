@@ -212,7 +212,7 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
             pyautogui.press("enter")
             time.sleep(2.0)
             screen_w, screen_h = pyautogui.size()
-            pyautogui.doubleClick(x=screen_w * 0.4, y=screen_h * 0.4)
+            pyautogui.doubleClick(x=screen_w * 0.25, y=screen_h * 0.45)
             return True, f"Playing {clean_query} on Spotify."
         else:
             return False, f"Unknown Spotify action: {action}"
