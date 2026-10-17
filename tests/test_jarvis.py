@@ -314,6 +314,17 @@ class TestKokoroTTSEngine(unittest.TestCase):
         mock_play.assert_called_once()
         mock_wait.assert_called_once()
 
+    def test_clean_speech_text_markdown_stripping(self):
+        from main import clean_speech_text
+        raw = "**Certainly**, sir. Here is the *status*: # System Check\n- Battery at 95%\n```code```"
+        cleaned = clean_speech_text(raw)
+        self.assertNotIn("**", cleaned)
+        self.assertNotIn("*", cleaned)
+        self.assertNotIn("#", cleaned)
+        self.assertNotIn("```", cleaned)
+        self.assertIn("percent", cleaned)
+        self.assertIn("Certainly, sir", cleaned)
+
 
 class TestOmniTools(unittest.TestCase):
     """Test PowerShell runner, DuckDuckGo search, volume control, screenshot, and process listing."""
@@ -841,6 +852,31 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         run_jarvis(self.assistant)
         self.assertEqual(mock_listen.call_count, 2)
         mock_speak.assert_any_call("What details would you like to know?")
+
+    @patch("main.Model")
+    @patch("sounddevice.InputStream")
+    @patch.object(VoiceAssistant, "speak")
+    @patch.object(VoiceAssistant, "listen")
+    @patch("ollama.chat")
+    def test_run_jarvis_follow_up_dismissal(self, mock_ollama_chat, mock_listen, mock_speak, mock_stream, mock_model_cls):
+        mock_model_instance = MagicMock()
+        mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
+        mock_model_cls.return_value = mock_model_instance
+
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.read.return_value = (np.zeros(1280, dtype=np.int16), False)
+        mock_stream.return_value.__enter__.return_value = mock_stream_instance
+
+        # 1st query asks question -> follow-up triggered -> user says "no thanks" -> Jarvis says "Very well, sir. Standing by."
+        # Next wake word -> "goodbye" -> exits
+        mock_listen.side_effect = ["Need info", "no thanks", "goodbye"]
+        mock_ollama_chat.return_value = [
+            {"message": {"content": "Can I help with anything else?"}}
+        ]
+
+        run_jarvis(self.assistant)
+        self.assertEqual(mock_listen.call_count, 3)
+        mock_speak.assert_any_call("Very well, sir. Standing by.")
 
 
 class TestJarvisVisualOverlay(unittest.TestCase):

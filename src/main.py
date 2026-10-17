@@ -95,6 +95,36 @@ _model_path, _voices_path = ensure_kokoro_models()
 kokoro = Kokoro(model_path=_model_path, voices_path=_voices_path)
 
 
+def clean_speech_text(text: str) -> str:
+    """Sanitize and format text for natural, polished TTS speech output."""
+    if not text:
+        return ""
+    # Remove code blocks
+    cleaned = re.sub(r"```[\s\S]*?```", "", text)
+    # Remove inline code backticks
+    cleaned = cleaned.replace("`", "")
+    # Remove markdown headers
+    cleaned = cleaned.replace("#", "")
+    # Remove markdown bold/italics
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+    cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
+    cleaned = re.sub(r"_([^_]+)_", r"\1", cleaned)
+    # Remove markdown links [text](url) -> text
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    # Remove raw URLs
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    # Remove markdown bullets/dashes
+    cleaned = re.sub(r"^\s*[-*•]\s+", "", cleaned, flags=re.MULTILINE)
+    # Convert symbols to spoken words for natural flow
+    cleaned = cleaned.replace("%", " percent")
+    cleaned = cleaned.replace("&", " and ")
+    # Clean excessive whitespace
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n\s*\n+", "\n", cleaned)
+    return cleaned.strip()
+
+
 def chunk_text(text: str, max_chunk_chars: int = 180) -> List[str]:
     """Split text into spoken sentence chunks on punctuation delimiters without audio buffer clipping."""
     cleaned = text.strip()
@@ -140,7 +170,7 @@ def chunk_text(text: str, max_chunk_chars: int = 180) -> List[str]:
 
 def synthesize_speech(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1) -> Tuple[Optional[np.ndarray], int]:
     """Synthesize speech audio array using Kokoro TTS with sentence chunking to prevent buffer clipping."""
-    cleaned = text.strip()
+    cleaned = clean_speech_text(text)
     if not cleaned:
         return None, 24000
 
@@ -425,6 +455,14 @@ def intercept_hardware_command(text: str) -> Optional[str]:
     return None
 
 
+JARVIS_SYSTEM_PROMPT = (
+    "You are Jarvis, a highly capable, elegant, and sophisticated British AI assistant. "
+    "Your responses must be concise, articulate, and naturally spoken. "
+    "Address the user politely as 'sir'. Never output raw markdown tables, asterisks, or code fences unless asked. "
+    "Execute actions swiftly using your available tools. Speak in clear, natural sentences suitable for text-to-speech."
+)
+
+
 class VoiceAssistant:
     def __init__(self, model_name: str = "jarvis", voice: str = CHOSEN_VOICE, **kwargs):
         self.model_name = model_name
@@ -462,9 +500,10 @@ class VoiceAssistant:
         self.conversation_history.append({"role": "user", "content": clean_prompt})
 
         try:
+            messages_to_send = [{"role": "system", "content": JARVIS_SYSTEM_PROMPT}] + self.conversation_history[-8:]
             response = ollama.chat(
                 model=self.model_name,
-                messages=self.conversation_history[-8:],
+                messages=messages_to_send,
                 tools=TOOL_SCHEMAS,
             )
             message = response.get("message", {})
@@ -622,10 +661,19 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
             while True:
                 user_text = None
 
+                was_follow_up = skip_wake_word
                 if skip_wake_word:
                     print("\n[Follow-up listening...]\n")
                     skip_wake_word = False
-                    user_text = assistant.listen()
+                    user_text = assistant.listen(timeout=6.0, max_silent_time=6.0)
+                    if not user_text or not user_text.strip():
+                        print("[Follow-up timed out. Resumed listening for 'Hey Jarvis'...]")
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        continue
                 else:
                     # Completely pause or stop microphone input stream while IS_SPEAKING is True
                     if IS_SPEAKING:
@@ -682,9 +730,24 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                 if user_text and user_text.strip():
                     print(f"[User]: {user_text}")
                     clean_text = user_text.strip()
-                    if clean_text.lower() in ["exit", "quit", "shutdown", "stop", "goodbye"]:
+                    lower_text = clean_text.lower()
+                    if lower_text in ["exit", "quit", "shutdown", "stop", "goodbye"]:
                         assistant.speak("Shutting down. Have a wonderful day, sir.")
                         break
+
+                    # Check follow-up dismissal phrases
+                    dismissals = ["no", "no thanks", "nothing", "that's all", "that is all", "nevermind", "never mind", "none", "i'm good", "im good", "all good", "thank you", "thanks"]
+                    if was_follow_up and (lower_text in dismissals or (len(lower_text.split()) <= 3 and any(d == lower_text for d in dismissals))):
+                        assistant.speak("Very well, sir. Standing by.")
+                        jarvis_response = "Standing by."
+                        skip_wake_word = False
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+                        continue
 
                     # Instant local hardware intent bypass
                     hw_reply = intercept_hardware_command(clean_text)
@@ -698,45 +761,56 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                             jarvis_response = system_reply
                         else:
                             messages.append({"role": "user", "content": clean_text})
-                        try:
-                            response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
-                            current_sentence = ""
-                            full_reply = ""
-                            for chunk in response:
-                                try:
-                                    content = chunk["message"]["content"]
-                                except Exception:
-                                    content = getattr(getattr(chunk, "message", None), "content", "")
-                                if not content:
-                                    continue
-                                current_sentence += content
-                                full_reply += content
+                            try:
+                                response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
+                                current_sentence = ""
+                                full_reply = ""
+                                for chunk in response:
+                                    try:
+                                        content = chunk["message"]["content"]
+                                    except Exception:
+                                        content = getattr(getattr(chunk, "message", None), "content", "")
+                                    if not content:
+                                        continue
+                                    current_sentence += content
+                                    full_reply += content
 
-                                while True:
-                                    match = re.search(r"([.?!])\s+", current_sentence)
-                                    if not match:
-                                        break
-                                    end_pos = match.end()
-                                    sentence = current_sentence[:end_pos].strip()
-                                    current_sentence = current_sentence[end_pos:]
-                                    if sentence:
-                                        assistant.speak(sentence)
+                                    while True:
+                                        match = re.search(r"([.?!])\s+", current_sentence)
+                                        if not match:
+                                            break
+                                        end_pos = match.end()
+                                        sentence = current_sentence[:end_pos].strip()
+                                        current_sentence = current_sentence[end_pos:]
+                                        if sentence:
+                                            assistant.speak(sentence)
 
-                            if current_sentence.strip():
-                                assistant.speak(current_sentence.strip())
+                                if current_sentence.strip():
+                                    assistant.speak(current_sentence.strip())
 
-                            if full_reply.strip():
-                                messages.append({"role": "assistant", "content": full_reply.strip()})
-                            jarvis_response = full_reply.strip()
-                        except Exception as exc:
-                            print(f"[Ollama Error]: {exc}")
-                            err_msg = "I encountered an error, sir."
-                            assistant.speak(err_msg)
-                            jarvis_response = err_msg
+                                if full_reply.strip():
+                                    messages.append({"role": "assistant", "content": full_reply.strip()})
+                                jarvis_response = full_reply.strip()
+                            except Exception as exc:
+                                print(f"[Ollama Error]: {exc}")
+                                err_msg = "I encountered an error, sir."
+                                assistant.speak(err_msg)
+                                jarvis_response = err_msg
 
-                # Follow-up check: If Jarvis's response contains "error", "repeat", or ends with "?", set skip_wake_word = True
-                resp_lower = jarvis_response.lower()
-                if jarvis_response and ("error" in resp_lower or "repeat" in resp_lower or jarvis_response.rstrip().endswith("?")):
+                # Follow-up check: If Jarvis's response contains questions or follow-up prompts
+                resp_lower = jarvis_response.lower() if jarvis_response else ""
+                followup_triggers = [
+                    "anything else", "shall i", "would you like",
+                    "do you want", "what else", "let me know", "repeat", "error"
+                ]
+                should_follow_up = False
+                if jarvis_response:
+                    if jarvis_response.rstrip().endswith("?"):
+                        should_follow_up = True
+                    elif any(t in resp_lower for t in followup_triggers):
+                        should_follow_up = True
+
+                if should_follow_up:
                     skip_wake_word = True
                 else:
                     skip_wake_word = False

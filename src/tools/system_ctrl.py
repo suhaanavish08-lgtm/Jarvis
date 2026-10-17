@@ -18,7 +18,9 @@ from ctypes import cast, POINTER
 import comtypes
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+import warnings
 
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 pyautogui.FAILSAFE = False
 
 
@@ -397,12 +399,18 @@ def search_web(query: str, max_results: int = 3) -> str:
         return "Search query cannot be empty."
 
     try:
-        from duckduckgo_search import DDGS
-        results = []
-        try:
-            results = list(DDGS().text(query.strip(), backend="html", max_results=max_results))
-        except Exception:
-            results = list(DDGS().text(query.strip(), max_results=max_results))
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
+            results = []
+            try:
+                results = list(DDGS().text(query.strip(), backend="html", max_results=max_results))
+            except Exception:
+                results = list(DDGS().text(query.strip(), max_results=max_results))
 
         if not results:
             return f"No results found for query: '{query}'."
