@@ -191,7 +191,7 @@ def is_audio_playing() -> bool:
 
 
 def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
-    """Generate and play audio non-blockingly using Kokoro TTS and sounddevice."""
+    """Generate and play audio using Kokoro TTS and sounddevice, strictly waiting for hardware completion."""
     global _playback_end_time, IS_SPEAKING
     print(f"\n[Jarvis]: {text}\n")
     if not text or not text.strip():
@@ -200,23 +200,17 @@ def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
         combined, sample_rate = synthesize_speech(text, voice=voice, speed=speed)
         if combined is not None and len(combined) > 0:
             duration = len(combined) / sample_rate
-            _playback_end_time = time.time() + duration
+            _playback_end_time = time.time() + duration + 0.5
             overlay.JARVIS_STATE = "speaking"
             IS_SPEAKING = True
-            sd.play(combined, sample_rate)
-
-            def _reset_speaking(end_time):
-                global IS_SPEAKING
-                wait_duration = max(0.0, end_time - time.time())
-                time.sleep(wait_duration)
-                if time.time() >= _playback_end_time:
-                    overlay.JARVIS_STATE = "idle"
-                # Add a 0.4s flush delay immediately after speaking finishes before allowing mic
-                time.sleep(0.4)
-                if time.time() >= _playback_end_time:
-                    IS_SPEAKING = False
-
-            threading.Thread(target=_reset_speaking, args=(_playback_end_time,), daemon=True).start()
+            try:
+                sd.play(combined, sample_rate)
+                sd.wait()
+                time.sleep(0.1)  # Safety margin: ensure final packet clears DAC before unmuting mic
+            finally:
+                overlay.JARVIS_STATE = "idle"
+                time.sleep(0.4)  # Wait 0.4s to prevent acoustic echo / interruptions
+                IS_SPEAKING = False
     except Exception as e:
         print(f"[Kokoro TTS Error]: {e}")
         overlay.JARVIS_STATE = "idle"
@@ -234,7 +228,15 @@ def listen(
 ) -> Optional[str]:
     """Record microphone audio via sounddevice, detect speech, stop after 0.7s silence, and transcribe via Whisper."""
     global _playback_end_time, IS_SPEAKING
+    start_time = time.time()
     effective_timeout = timeout if timeout is not None else max_silent_time
+
+    # Wait if system is currently speaking (with timeout safeguard)
+    while IS_SPEAKING:
+        if effective_timeout is not None and (time.time() - start_time) >= effective_timeout:
+            return None
+        time.sleep(0.02)
+
     print("[Listening for speech...]")
     overlay.JARVIS_STATE = "listening"
 
@@ -244,19 +246,38 @@ def listen(
     silence_limit_samples = int(silence_duration * samplerate)
     initial_silence_samples = 0
     max_initial_samples = int(effective_timeout * samplerate) if effective_timeout is not None else None
-
-    start_time = time.time()
     try:
         with sd.InputStream(samplerate=samplerate, channels=1, dtype="int16") as stream:
+            # Flush all stale audio frames from mic buffer before resuming
+            try:
+                if hasattr(stream, "read_available") and stream.read_available > 0:
+                    stream.read(stream.read_available)
+            except Exception:
+                pass
+
             while True:
                 if effective_timeout is not None and (time.time() - start_time) >= effective_timeout:
                     return None
 
-                chunk, _ = stream.read(chunk_size)
-                # Immediately discard any incoming audio frames if IS_SPEAKING == True
+                # Completely pause or stop microphone input stream while IS_SPEAKING is True
                 if IS_SPEAKING:
-                    time.sleep(0.01)
+                    try:
+                        if stream.active:
+                            stream.stop()
+                    except Exception:
+                        pass
+                    time.sleep(0.02)
                     continue
+                else:
+                    try:
+                        if not stream.active:
+                            stream.start()
+                            if hasattr(stream, "read_available") and stream.read_available > 0:
+                                stream.read(stream.read_available)
+                    except Exception:
+                        pass
+
+                chunk, _ = stream.read(chunk_size)
 
                 vol = np.max(np.abs(chunk))
 
@@ -319,6 +340,52 @@ def listen(
         return None
     finally:
         overlay.JARVIS_STATE = "idle"
+
+
+def intercept_hardware_command(text: str) -> Optional[str]:
+    """Instant local interceptor for volume and brightness to bypass LLM hallucination and latency."""
+    if not text:
+        return None
+    lower = text.strip().lower()
+    clean = re.sub(r"[^\w\s]", "", lower)
+
+    # Volume Up triggers
+    vol_up_triggers = [
+        "increase volume", "volume up", "turn it up", "turn up volume",
+        "turn up the volume", "raise volume", "raise the volume", "higher volume"
+    ]
+    if any(t in clean for t in vol_up_triggers):
+        manage_volume("up")
+        return "Volume increased, sir."
+
+    # Volume Down triggers
+    vol_down_triggers = [
+        "decrease volume", "volume down", "lower volume", "lower the volume",
+        "turn it down", "turn down volume", "turn down the volume", "reduce volume"
+    ]
+    if any(t in clean for t in vol_down_triggers):
+        manage_volume("down")
+        return "Volume decreased, sir."
+
+    # Brightness Up triggers
+    bright_up_triggers = [
+        "increase brightness", "brightness up", "turn up brightness",
+        "turn up the brightness", "raise brightness", "higher brightness"
+    ]
+    if any(t in clean for t in bright_up_triggers):
+        manage_brightness("up")
+        return "Brightness increased, sir."
+
+    # Brightness Down triggers
+    bright_down_triggers = [
+        "decrease brightness", "lower brightness", "dim screen", "dim the screen",
+        "brightness down", "turn down brightness", "reduce brightness"
+    ]
+    if any(t in clean for t in bright_down_triggers):
+        manage_brightness("down")
+        return "Brightness decreased, sir."
+
+    return None
 
 
 class VoiceAssistant:
@@ -448,6 +515,12 @@ class VoiceAssistant:
             self.speak("Shutting down. Have a wonderful day, sir.")
             return False
 
+        # Instant local hardware intent bypass
+        hw_reply = intercept_hardware_command(clean_text)
+        if hw_reply:
+            self.speak(hw_reply)
+            return True
+
         # First evaluate local system & Spotify control commands
         handled, system_reply = handle_system_command(clean_text)
         if handled:
@@ -517,6 +590,24 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                     skip_wake_word = False
                     user_text = assistant.listen()
                 else:
+                    # Completely pause or stop microphone input stream while IS_SPEAKING is True
+                    if IS_SPEAKING:
+                        try:
+                            if stream.active:
+                                stream.stop()
+                        except Exception:
+                            pass
+                        time.sleep(0.02)
+                        continue
+                    else:
+                        try:
+                            if not stream.active:
+                                stream.start()
+                                if hasattr(stream, "read_available") and stream.read_available > 0:
+                                    stream.read(stream.read_available)
+                        except Exception:
+                            pass
+
                     try:
                         audio_chunk, _ = stream.read(chunk_size)
                     except (sd.PortAudioError, OSError) as mic_err:
@@ -525,11 +616,6 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                         continue
 
                     if audio_chunk is None or len(audio_chunk) == 0:
-                        continue
-
-                    # Immediately discard any incoming audio frames if IS_SPEAKING == True
-                    if IS_SPEAKING:
-                        time.sleep(0.01)
                         continue
 
                     # Mic Boost: multiply chunk by 2.5, clip to np.int16
@@ -563,12 +649,18 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                         assistant.speak("Shutting down. Have a wonderful day, sir.")
                         break
 
-                    handled, system_reply = handle_system_command(clean_text)
-                    if handled:
-                        assistant.speak(system_reply)
-                        jarvis_response = system_reply
+                    # Instant local hardware intent bypass
+                    hw_reply = intercept_hardware_command(clean_text)
+                    if hw_reply:
+                        assistant.speak(hw_reply)
+                        jarvis_response = hw_reply
                     else:
-                        messages.append({"role": "user", "content": clean_text})
+                        handled, system_reply = handle_system_command(clean_text)
+                        if handled:
+                            assistant.speak(system_reply)
+                            jarvis_response = system_reply
+                        else:
+                            messages.append({"role": "user", "content": clean_text})
                         try:
                             response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
                             current_sentence = ""

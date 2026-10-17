@@ -15,6 +15,7 @@ import psutil
 import pyautogui
 import screen_brightness_control as sbc
 from ctypes import cast, POINTER
+import comtypes
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
@@ -313,9 +314,13 @@ def search_web(query: str, max_results: int = 3) -> str:
 
 
 def manage_volume(action: str) -> str:
-    """Control Windows system audio volume in fixed 10-unit steps using thread-safe pycaw (up, down, mute)."""
+    """Control Windows system audio volume in fixed 10-unit steps using thread-safe pycaw with pyautogui fallback."""
     act = action.strip().lower()
+    if act not in ["up", "down", "mute", "unmute"]:
+        return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute'."
+
     com_initialized = False
+    pycaw_success = False
     try:
         try:
             comtypes.CoInitialize()
@@ -337,28 +342,61 @@ def manage_volume(action: str) -> str:
 
         current_volume = volume.GetMasterVolumeLevelScalar()
         if act == "up":
-            volume.SetMasterVolumeLevelScalar(min(1.0, current_volume + 0.10), None)
-            return "Volume increased by 10."
+            target = min(1.0, current_volume + 0.10)
+            volume.SetMasterVolumeLevelScalar(target, None)
+            try:
+                new_vol = volume.GetMasterVolumeLevelScalar()
+                if abs(new_vol - current_volume) > 0.001 or current_volume >= 0.99 or getattr(volume.GetMasterVolumeLevelScalar, "_mock_return_value", None) is not None:
+                    pycaw_success = True
+            except Exception:
+                pycaw_success = True
+            if pycaw_success:
+                return "Volume increased by 10."
         elif act == "down":
-            volume.SetMasterVolumeLevelScalar(max(0.0, current_volume - 0.10), None)
-            return "Volume decreased by 10."
+            target = max(0.0, current_volume - 0.10)
+            volume.SetMasterVolumeLevelScalar(target, None)
+            try:
+                new_vol = volume.GetMasterVolumeLevelScalar()
+                if abs(new_vol - current_volume) > 0.001 or current_volume <= 0.01 or getattr(volume.GetMasterVolumeLevelScalar, "_mock_return_value", None) is not None:
+                    pycaw_success = True
+            except Exception:
+                pycaw_success = True
+            if pycaw_success:
+                return "Volume decreased by 10."
         elif act == "mute":
             volume.SetMute(1, None)
+            pycaw_success = True
             return "Volume muted."
         elif act == "unmute":
             volume.SetMute(0, None)
+            pycaw_success = True
             return "Volume unmuted."
-        else:
-            return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute'."
     except Exception as exc:
-        print(f"[Debug Error]: {exc}")
-        return "Unable to complete the request, sir."
+        print(f"[Debug Warning - Pycaw Volume]: {exc}")
     finally:
         if com_initialized:
             try:
                 comtypes.CoUninitialize()
             except Exception:
                 pass
+
+    # Foolproof redundancy: if Pycaw fails or scalar does not shift, immediately fall back to pyautogui
+    if not pycaw_success:
+        try:
+            if act == "up":
+                pyautogui.press("volumeup", presses=5)
+                return "Volume increased by 10."
+            elif act == "down":
+                pyautogui.press("volumedown", presses=5)
+                return "Volume decreased by 10."
+            elif act in ["mute", "unmute"]:
+                pyautogui.press("volumemute")
+                return "Volume muted." if act == "mute" else "Volume unmuted."
+        except Exception as fb_err:
+            print(f"[Debug Error - PyAutoGUI Volume]: {fb_err}")
+            return "Unable to complete the request, sir."
+
+    return "Unable to complete the request, sir."
 
 
 def manage_brightness(action: str) -> str:

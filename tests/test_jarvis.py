@@ -263,7 +263,7 @@ class TestKokoroTTSEngine(unittest.TestCase):
     def test_speak_invocation(self, mock_wait, mock_play):
         speak("At your service, sir.")
         mock_play.assert_called_once()
-        mock_wait.assert_not_called()
+        mock_wait.assert_called_once()
 
 
 class TestOmniTools(unittest.TestCase):
@@ -324,6 +324,14 @@ class TestOmniTools(unittest.TestCase):
         msg_unmute = manage_volume("unmute")
         mock_volume.SetMute.assert_called_with(0, None)
         self.assertEqual(msg_unmute, "Volume unmuted.")
+
+    @patch("pyautogui.press")
+    @patch("src.tools.system_ctrl.AudioUtilities.GetSpeakers")
+    def test_manage_volume_pyautogui_fallback(self, mock_get_speakers, mock_press):
+        mock_get_speakers.side_effect = Exception("COM endpoint failed")
+        msg = manage_volume("up")
+        mock_press.assert_called_with("volumeup", presses=5)
+        self.assertEqual(msg, "Volume increased by 10.")
 
     @patch("subprocess.run")
     @patch("screen_brightness_control.set_brightness")
@@ -786,48 +794,48 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
 
 class TestJarvisVisualOverlay(unittest.TestCase):
-    """Test top-center gradient waveform visual overlay state management and animation logic."""
+    """Test compact top title-bar gradient waveform visual overlay state management and animation logic."""
 
     def test_initial_state_idle(self):
         self.assertIn(overlay.JARVIS_STATE, ["idle", "listening", "speaking"])
         self.assertIsNotNone(overlay.root)
         self.assertIsNotNone(overlay.canvas)
-        self.assertEqual(len(overlay.bars), 50)
-        self.assertEqual(len(overlay.dots), 50)
+        self.assertEqual(len(overlay.lines), 30)
+        self.assertEqual(len(overlay.bars), 30)
 
     def test_overlay_geometry(self):
-        self.assertEqual(overlay.w, 500)
-        self.assertEqual(overlay.h, 120)
-        self.assertEqual(overlay.y, 10)
+        self.assertEqual(overlay.w, 240)
+        self.assertEqual(overlay.h, 30)
+        self.assertEqual(overlay.y, 2)
 
-    def test_update_animation_idle_draws_breathing_waveform(self):
+    def test_update_animation_idle_draws_center_line(self):
         overlay.JARVIS_STATE = "idle"
         overlay.update_animation()
-        for bar in overlay.bars:
-            coords = overlay.canvas.coords(bar)
+        for line in overlay.lines:
+            coords = overlay.canvas.coords(line)
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
-            self.assertTrue(x2 > x1)
-            self.assertTrue(y2 > y1)
+            self.assertEqual(x1, x2)
+            self.assertAlmostEqual(y2 - y1, 2.0, places=1)
 
     def test_update_animation_listening_wave_effect(self):
         overlay.JARVIS_STATE = "listening"
         overlay.update_animation()
-        for bar in overlay.bars:
-            coords = overlay.canvas.coords(bar)
+        for line in overlay.lines:
+            coords = overlay.canvas.coords(line)
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
-            self.assertTrue(x2 > x1)
+            self.assertEqual(x1, x2)
             self.assertTrue(y2 > y1)
 
-    def test_update_animation_speaking_modulates_bars(self):
+    def test_update_animation_speaking_modulates_lines(self):
         overlay.JARVIS_STATE = "speaking"
         overlay.update_animation()
-        for bar in overlay.bars:
-            coords = overlay.canvas.coords(bar)
+        for line in overlay.lines:
+            coords = overlay.canvas.coords(line)
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
-            self.assertTrue(x2 > x1)
+            self.assertEqual(x1, x2)
             self.assertTrue(y2 > y1)
 
     def test_listen_sets_and_resets_overlay_state(self):
@@ -852,6 +860,43 @@ class TestJarvisVisualOverlay(unittest.TestCase):
                 self.assertIsNone(result)
             finally:
                 main.IS_SPEAKING = False
+
+
+class TestHardwareIntentBypass(unittest.TestCase):
+    """Test instant local hardware control interceptor for volume and brightness."""
+
+    @patch("main.manage_volume")
+    def test_volume_up_bypass(self, mock_vol):
+        from main import intercept_hardware_command
+        reply = intercept_hardware_command("could you turn it up please?")
+        mock_vol.assert_called_with("up")
+        self.assertEqual(reply, "Volume increased, sir.")
+
+    @patch("main.manage_volume")
+    def test_volume_down_bypass(self, mock_vol):
+        from main import intercept_hardware_command
+        reply = intercept_hardware_command("lower volume")
+        mock_vol.assert_called_with("down")
+        self.assertEqual(reply, "Volume decreased, sir.")
+
+    @patch("main.manage_brightness")
+    def test_brightness_up_bypass(self, mock_bright):
+        from main import intercept_hardware_command
+        reply = intercept_hardware_command("increase brightness")
+        mock_bright.assert_called_with("up")
+        self.assertEqual(reply, "Brightness increased, sir.")
+
+    @patch("main.manage_brightness")
+    def test_brightness_down_bypass(self, mock_bright):
+        from main import intercept_hardware_command
+        reply = intercept_hardware_command("dim screen")
+        mock_bright.assert_called_with("down")
+        self.assertEqual(reply, "Brightness decreased, sir.")
+
+    def test_non_hardware_query_returns_none(self):
+        from main import intercept_hardware_command
+        reply = intercept_hardware_command("what is the weather today?")
+        self.assertIsNone(reply)
 
 
 if __name__ == "__main__":
