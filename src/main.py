@@ -251,6 +251,8 @@ def listen(
                     else:
                         silence_samples = 0
 
+                time.sleep(0.01)
+
         if not audio_chunks:
             return None
 
@@ -499,10 +501,48 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                     user_text = assistant.listen()
                     if user_text and user_text.strip():
                         print(f"[User]: {user_text}")
-                        # Execute the tool/LLM response
-                        should_continue = assistant.process_input(user_text)
-                        if not should_continue:
+                        clean_text = user_text.strip()
+                        if clean_text.lower() in ["exit", "quit", "shutdown", "stop", "goodbye"]:
+                            assistant.speak("Shutting down. Have a wonderful day, sir.")
                             break
+
+                        handled, system_reply = handle_system_command(clean_text)
+                        if handled:
+                            assistant.speak(system_reply)
+                        else:
+                            messages.append({"role": "user", "content": clean_text})
+                            try:
+                                response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
+                                current_sentence = ""
+                                full_reply = ""
+                                for chunk in response:
+                                    try:
+                                        content = chunk["message"]["content"]
+                                    except Exception:
+                                        content = getattr(getattr(chunk, "message", None), "content", "")
+                                    if not content:
+                                        continue
+                                    current_sentence += content
+                                    full_reply += content
+
+                                    while True:
+                                        match = re.search(r"([.?!])\s+", current_sentence)
+                                        if not match:
+                                            break
+                                        end_pos = match.end()
+                                        sentence = current_sentence[:end_pos].strip()
+                                        current_sentence = current_sentence[end_pos:]
+                                        if sentence:
+                                            assistant.speak(sentence)
+
+                                if current_sentence.strip():
+                                    assistant.speak(current_sentence.strip())
+
+                                if full_reply.strip():
+                                    messages.append({"role": "assistant", "content": full_reply.strip()})
+                            except Exception as exc:
+                                print(f"[Ollama Error]: {exc}")
+                                assistant.speak("I encountered an error, sir.")
 
                     oww_model.reset()
                     try:
@@ -510,6 +550,8 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                     except Exception:
                         pass
                     print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+
+                time.sleep(0.01)
 
     except KeyboardInterrupt:
         assistant.speak("Jarvis paused. Goodbye.")
