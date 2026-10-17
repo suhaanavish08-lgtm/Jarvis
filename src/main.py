@@ -355,8 +355,23 @@ def intercept_hardware_command(text: str) -> Optional[str]:
     is_up = any(w in words for w in ["up", "increase", "increased", "raise", "raised", "boost", "boosted", "higher", "high", "more", "max"])
     is_down = any(w in words for w in ["down", "decrease", "decreased", "lower", "lowered", "reduce", "reduced", "drop", "dropped", "less"])
 
+    num_match = re.search(r"\b(\d{1,3})\b", clean)
+    num_val = int(num_match.group(1)) if num_match else None
+    if num_val is not None and num_val > 100:
+        num_val = 100
+
     # 1. Explicit Brightness commands
     if has_bright:
+        if num_val is not None:
+            if any(w in words for w in ["by", "more", "add"]) and is_up:
+                manage_brightness("up", value=num_val)
+                return f"Brightness increased by {num_val}%, sir."
+            if any(w in words for w in ["by", "less", "minus"]) and is_down:
+                manage_brightness("down", value=num_val)
+                return f"Brightness decreased by {num_val}%, sir."
+            manage_brightness("set", value=num_val)
+            return f"Brightness set to {num_val}%, sir."
+
         if is_up or "brighter" in words or "turn up" in clean or "turn it up" in clean or "make it brighter" in clean:
             manage_brightness("up")
             return "Brightness increased, sir."
@@ -382,6 +397,16 @@ def intercept_hardware_command(text: str) -> Optional[str]:
 
     # 4. Explicit Volume commands
     if has_vol:
+        if num_val is not None:
+            if any(w in words for w in ["by", "more", "add"]) and is_up:
+                manage_volume("up", value=num_val)
+                return f"Volume increased by {num_val}%, sir."
+            if any(w in words for w in ["by", "less", "minus"]) and is_down:
+                manage_volume("down", value=num_val)
+                return f"Volume decreased by {num_val}%, sir."
+            manage_volume("set", value=num_val)
+            return f"Volume set to {num_val}%, sir."
+
         if is_up or "louder" in words or "turn up" in clean or "turn it up" in clean or "make it louder" in clean:
             manage_volume("up")
             return "Volume increased, sir."
@@ -473,10 +498,10 @@ class VoiceAssistant:
                         search_out = search_web(query=fn_args.get("query", ""), max_results=int(fn_args.get("max_results", 3)))
                         tool_replies.append(search_out)
                     elif fn_name == "manage_volume":
-                        vol_out = manage_volume(action=fn_args.get("action", "mute"))
+                        vol_out = manage_volume(action=fn_args.get("action", "mute"), value=fn_args.get("value"))
                         tool_replies.append(vol_out)
                     elif fn_name == "manage_brightness":
-                        bright_out = manage_brightness(action=fn_args.get("action", "up"))
+                        bright_out = manage_brightness(action=fn_args.get("action", "up"), value=fn_args.get("value"))
                         tool_replies.append(bright_out)
                     elif fn_name == "capture_screen":
                         screen_out = capture_screen()

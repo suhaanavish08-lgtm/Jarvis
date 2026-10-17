@@ -1,9 +1,19 @@
 """Top-center header gradient waveform visualizer for Jarvis."""
 
+import ctypes
 import math
 import random
 import time
 import tkinter as tk
+
+# Enable Per-Monitor DPI Awareness so Tkinter screen width and placement align with physical monitor pixels
+try:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        ctypes.windll.user32.SetProcessDPIAware()
+except Exception:
+    pass
 
 JARVIS_STATE = "idle"
 

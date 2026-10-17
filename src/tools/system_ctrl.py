@@ -313,11 +313,20 @@ def search_web(query: str, max_results: int = 3) -> str:
         return "Unable to complete the request, sir."
 
 
-def manage_volume(action: str) -> str:
-    """Control Windows system audio volume in fixed 10-unit steps using thread-safe pycaw with pyautogui fallback."""
-    act = action.strip().lower()
-    if act not in ["up", "down", "mute", "unmute"]:
-        return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute'."
+def manage_volume(action: str, value: Optional[int] = None) -> str:
+    """Control Windows system audio volume in fixed steps or specific percentage values."""
+    act = str(action).strip().lower()
+
+    # Determine numeric value
+    target_val = None
+    if value is not None:
+        try:
+            target_val = max(0, min(100, int(value)))
+        except (ValueError, TypeError):
+            pass
+    elif act.isdigit():
+        target_val = max(0, min(100, int(act)))
+        act = "set"
 
     com_initialized = False
     pycaw_success = False
@@ -341,8 +350,17 @@ def manage_volume(action: str) -> str:
             volume = cast(devices, POINTER(IAudioEndpointVolume))
 
         current_volume = volume.GetMasterVolumeLevelScalar()
-        if act == "up":
-            target = min(1.0, current_volume + 0.10)
+
+        if act in ["set", "to"] or (target_val is not None and act not in ["up", "down", "mute", "unmute"]):
+            if target_val is None:
+                target_val = 50
+            scalar = target_val / 100.0
+            volume.SetMasterVolumeLevelScalar(scalar, None)
+            pycaw_success = True
+            return f"Volume set to {target_val}%."
+        elif act == "up":
+            step = (target_val / 100.0) if target_val is not None else 0.10
+            target = min(1.0, current_volume + step)
             volume.SetMasterVolumeLevelScalar(target, None)
             try:
                 new_vol = volume.GetMasterVolumeLevelScalar()
@@ -351,9 +369,10 @@ def manage_volume(action: str) -> str:
             except Exception:
                 pycaw_success = True
             if pycaw_success:
-                return "Volume increased by 10."
+                return f"Volume increased by {int(round(step * 100))}."
         elif act == "down":
-            target = max(0.0, current_volume - 0.10)
+            step = (target_val / 100.0) if target_val is not None else 0.10
+            target = max(0.0, current_volume - step)
             volume.SetMasterVolumeLevelScalar(target, None)
             try:
                 new_vol = volume.GetMasterVolumeLevelScalar()
@@ -362,7 +381,7 @@ def manage_volume(action: str) -> str:
             except Exception:
                 pycaw_success = True
             if pycaw_success:
-                return "Volume decreased by 10."
+                return f"Volume decreased by {int(round(step * 100))}."
         elif act == "mute":
             volume.SetMute(1, None)
             pycaw_success = True
@@ -371,6 +390,8 @@ def manage_volume(action: str) -> str:
             volume.SetMute(0, None)
             pycaw_success = True
             return "Volume unmuted."
+        else:
+            return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute', 'set'."
     except Exception as exc:
         print(f"[Debug Warning - Pycaw Volume]: {exc}")
     finally:
@@ -399,31 +420,64 @@ def manage_volume(action: str) -> str:
     return "Unable to complete the request, sir."
 
 
-def manage_brightness(action: str) -> str:
-    """Control display brightness in fixed 10-unit steps using screen_brightness_control with WMI fallback."""
+def manage_brightness(action: str, value: Optional[int] = None) -> str:
+    """Control display brightness in fixed steps or specific percentage values with WMI fallback."""
     act = str(action).strip().lower()
+
+    # Determine numeric value
+    target_val = None
+    if value is not None:
+        try:
+            target_val = max(0, min(100, int(value)))
+        except (ValueError, TypeError):
+            pass
+    elif act.isdigit():
+        target_val = max(0, min(100, int(act)))
+        act = "set"
+
+    # Handle explicit percentage set
+    if act in ["set", "to"] or (target_val is not None and act not in ["up", "down"]):
+        if target_val is None:
+            target_val = 50
+        try:
+            sbc.set_brightness(target_val)
+            return f"Brightness set to {target_val}%."
+        except Exception as sbc_err:
+            print(f"[Debug Warning - SBC Brightness Set]: {sbc_err}")
+            try:
+                cmd = (
+                    f"(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods)"
+                    f".WmiSetBrightness(0, {target_val})"
+                )
+                subprocess.run(["powershell", "-Command", cmd], capture_output=True, timeout=5)
+                return f"Brightness set to {target_val}%."
+            except Exception as wmi_err:
+                print(f"[Debug Error - WMI Brightness]: {wmi_err}")
+                return "Unable to adjust brightness, sir."
+
     if act not in ["up", "down"]:
-        return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down'."
+        return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down', 'set'."
 
     action_word = "increased" if act == "up" else "decreased"
-    step_arg = "+10" if act == "up" else "-10"
+    step_num = target_val if target_val is not None else 10
+    step_arg = f"+{step_num}" if act == "up" else f"-{step_num}"
 
     # Primary logic: screen_brightness_control
     try:
         sbc.set_brightness(step_arg)
-        return f"Brightness {action_word} by 10."
+        return f"Brightness {action_word} by {step_num}."
     except Exception as sbc_err:
         print(f"[Debug Warning - SBC Brightness]: {sbc_err}")
         # Fallback to direct PowerShell WMI calls
         try:
             cmd = (
                 f"$val = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness; "
-                f"if ('{act}' -eq 'up') {{ $val = [math]::Min(100, $val + 10) }} "
-                f"else {{ $val = [math]::Max(0, $val - 10) }}; "
+                f"if ('{act}' -eq 'up') {{ $val = [math]::Min(100, $val + {step_num}) }} "
+                f"else {{ $val = [math]::Max(0, $val - {step_num}) }}; "
                 f"(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(0, $val)"
             )
             subprocess.run(["powershell", "-Command", cmd], capture_output=True, timeout=5)
-            return f"Brightness {action_word} by 10."
+            return f"Brightness {action_word} by {step_num}."
         except Exception as wmi_err:
             print(f"[Debug Error - WMI Brightness]: {wmi_err}")
             return "Unable to adjust brightness, sir."
@@ -594,18 +648,21 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_volume",
-            "description": "Control Windows system audio volume in fixed 10-unit steps. Under no circumstances provide numbers; only trigger 'up', 'down', or 'mute' actions.",
+            "description": "Control Windows system audio volume. Can increase, decrease, mute, unmute, or set to a specific percentage.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["up", "down", "mute"],
-                        "description": "Audio action to perform. Only accepts 'up', 'down', or 'mute'."
+                        "enum": ["up", "down", "mute", "unmute", "set"],
+                        "description": "Audio action to perform: 'up', 'down', 'mute', 'unmute', or 'set'."
+                    },
+                    "value": {
+                        "type": "integer",
+                        "description": "Optional percentage value between 0 and 100 (e.g. 30, 50, 80) when setting or stepping volume."
                     }
                 },
-                "required": ["action"],
-                "additionalProperties": False
+                "required": ["action"]
             }
         }
     },
@@ -613,18 +670,21 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_brightness",
-            "description": "Control screen brightness in fixed 10-unit steps. Under no circumstances provide numbers; only trigger 'up' or 'down' actions.",
+            "description": "Control screen brightness. Can increase, decrease, or set to a specific percentage.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["up", "down"],
-                        "description": "Brightness action to perform. Only accepts 'up' or 'down'."
+                        "enum": ["up", "down", "set"],
+                        "description": "Brightness action to perform: 'up', 'down', or 'set'."
+                    },
+                    "value": {
+                        "type": "integer",
+                        "description": "Optional percentage value between 0 and 100 (e.g. 30, 50, 80) when setting or stepping brightness."
                     }
                 },
-                "required": ["action"],
-                "additionalProperties": False
+                "required": ["action"]
             }
         }
     },
@@ -710,8 +770,19 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
     is_up = any(w in words for w in ["up", "increase", "increased", "raise", "raised", "boost", "boosted", "higher", "high", "more", "max"])
     is_down = any(w in words for w in ["down", "decrease", "decreased", "lower", "lowered", "reduce", "reduced", "drop", "dropped", "less"])
 
+    num_match = re.search(r"\b(\d{1,3})\b", clean_text)
+    num_val = int(num_match.group(1)) if num_match else None
+    if num_val is not None and num_val > 100:
+        num_val = 100
+
     # Brightness keywords
     if has_bright:
+        if num_val is not None:
+            if any(w in words for w in ["by", "more", "add"]) and is_up:
+                return True, manage_brightness("up", value=num_val)
+            if any(w in words for w in ["by", "less", "minus"]) and is_down:
+                return True, manage_brightness("down", value=num_val)
+            return True, manage_brightness("set", value=num_val)
         if is_up or "brighter" in words or "turn up" in clean_text or "turn it up" in clean_text or "make it brighter" in clean_text:
             return True, manage_brightness("up")
         if is_down or "dim" in words or "dimmed" in words or "darker" in words or "turn down" in clean_text or "turn it down" in clean_text or "make it darker" in clean_text:
@@ -729,6 +800,12 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
         return True, manage_volume("mute")
 
     if has_vol:
+        if num_val is not None:
+            if any(w in words for w in ["by", "more", "add"]) and is_up:
+                return True, manage_volume("up", value=num_val)
+            if any(w in words for w in ["by", "less", "minus"]) and is_down:
+                return True, manage_volume("down", value=num_val)
+            return True, manage_volume("set", value=num_val)
         if is_up or "louder" in words or "turn up" in clean_text or "turn it up" in clean_text or "make it louder" in clean_text:
             return True, manage_volume("up")
         if is_down or "quieter" in words or "softer" in words or "turn down" in clean_text or "turn it down" in clean_text or "make it quieter" in clean_text:

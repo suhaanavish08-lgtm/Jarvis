@@ -545,14 +545,15 @@ class TestLLMToolCalling(unittest.TestCase):
         vol_schema = schemas_by_name["manage_volume"]
         bright_schema = schemas_by_name["manage_brightness"]
 
-        # Ensure value, amount, percentage are completely deleted
-        for forbidden in ["value", "amount", "percentage"]:
-            self.assertNotIn(forbidden, vol_schema["parameters"]["properties"])
-            self.assertNotIn(forbidden, bright_schema["parameters"]["properties"])
+        # Ensure value is supported as an integer property
+        self.assertIn("value", vol_schema["parameters"]["properties"])
+        self.assertEqual(vol_schema["parameters"]["properties"]["value"]["type"], "integer")
+        self.assertIn("value", bright_schema["parameters"]["properties"])
+        self.assertEqual(bright_schema["parameters"]["properties"]["value"]["type"], "integer")
 
         # Check allowed action enums
-        self.assertEqual(vol_schema["parameters"]["properties"]["action"]["enum"], ["up", "down", "mute"])
-        self.assertEqual(bright_schema["parameters"]["properties"]["action"]["enum"], ["up", "down"])
+        self.assertEqual(vol_schema["parameters"]["properties"]["action"]["enum"], ["up", "down", "mute", "unmute", "set"])
+        self.assertEqual(bright_schema["parameters"]["properties"]["action"]["enum"], ["up", "down", "set"])
         self.assertEqual(vol_schema["parameters"]["required"], ["action"])
         self.assertEqual(bright_schema["parameters"]["required"], ["action"])
 
@@ -924,6 +925,36 @@ class TestHardwareIntentBypass(unittest.TestCase):
         from main import intercept_hardware_command
         reply = intercept_hardware_command("what is the weather today?")
         self.assertIsNone(reply)
+
+    @patch("main.manage_brightness")
+    def test_brightness_percentage_bypass(self, mock_bright):
+        from main import intercept_hardware_command
+        reply1 = intercept_hardware_command("set brightness to 30%")
+        self.assertEqual(reply1, "Brightness set to 30%, sir.")
+        mock_bright.assert_called_with("set", value=30)
+
+        reply2 = intercept_hardware_command("brightness to 75")
+        self.assertEqual(reply2, "Brightness set to 75%, sir.")
+        mock_bright.assert_called_with("set", value=75)
+
+        reply3 = intercept_hardware_command("increase brightness by 15%")
+        self.assertEqual(reply3, "Brightness increased by 15%, sir.")
+        mock_bright.assert_called_with("up", value=15)
+
+    @patch("main.manage_volume")
+    def test_volume_percentage_bypass(self, mock_vol):
+        from main import intercept_hardware_command
+        reply1 = intercept_hardware_command("set volume to 50%")
+        self.assertEqual(reply1, "Volume set to 50%, sir.")
+        mock_vol.assert_called_with("set", value=50)
+
+        reply2 = intercept_hardware_command("volume to 80")
+        self.assertEqual(reply2, "Volume set to 80%, sir.")
+        mock_vol.assert_called_with("set", value=80)
+
+        reply3 = intercept_hardware_command("lower volume by 20%")
+        self.assertEqual(reply3, "Volume decreased by 20%, sir.")
+        mock_vol.assert_called_with("down", value=20)
 
 
 if __name__ == "__main__":
