@@ -606,10 +606,22 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assertEqual(self.assistant.conversation_history[2]["content"], "What did I just ask?")
         self.assertEqual(self.assistant.conversation_history[3]["content"], "You asked for my identity, sir.")
 
-    @patch.object(VoiceAssistant, "run_voice_loop")
-    def test_run_jarvis_entrypoint_initializes_context(self, mock_loop):
+    @patch("main.Model")
+    @patch("sounddevice.InputStream")
+    @patch.object(VoiceAssistant, "speak")
+    @patch.object(VoiceAssistant, "listen", return_value="Check system status")
+    @patch.object(VoiceAssistant, "process_input", return_value=False)
+    def test_run_jarvis_entrypoint_initializes_context(self, mock_process, mock_listen, mock_speak, mock_stream, mock_model_cls):
+        mock_model_instance = MagicMock()
+        mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
+        mock_model_cls.return_value = mock_model_instance
+
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.read.return_value = (np.zeros(1280, dtype=np.int16), False)
+        mock_stream.return_value.__enter__.return_value = mock_stream_instance
+
         run_jarvis(self.assistant)
-        mock_loop.assert_called_once()
+        mock_model_cls.assert_called_with(wakeword_models=["hey_jarvis"])
         self.assertIs(self.assistant.messages, self.assistant.conversation_history)
 
 

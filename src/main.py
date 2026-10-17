@@ -397,65 +397,7 @@ class VoiceAssistant:
 
     def run_voice_loop(self):
         """Continuously run the voice interaction loop with 'Hey Jarvis' wake word detection."""
-        try:
-            import openwakeword.utils
-            openwakeword.utils.download_models(model_names=["hey_jarvis"])
-        except Exception:
-            pass
-
-        oww_model = Model(wakeword_models=["hey_jarvis"])
-        self.speak("Jarvis is online and ready for commands.")
-        print("\n[Jarvis]: Listening for 'Hey Jarvis' wake word...\n")
-
-        chunk_size = 1280  # 80ms audio chunk at 16kHz for openwakeword
-        sample_rate = 16000
-
-        messages = self.conversation_history  # Persistent context outside and above while True loop
-
-        try:
-            with sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16") as stream:
-                while True:
-                    try:
-                        audio_chunk, _ = stream.read(chunk_size)
-                    except (sd.PortAudioError, OSError) as mic_err:
-                        print(f"[Microphone Error]: {mic_err}")
-                        time.sleep(1.0)
-                        continue
-
-                    if audio_chunk is None or len(audio_chunk) == 0:
-                        continue
-
-                    prediction = oww_model.predict(audio_chunk.flatten())
-                    score = prediction.get("hey_jarvis", 0.0)
-
-                    if score >= 0.5:
-                        print(f"\n[Wake Word]: 'Hey Jarvis' detected! (confidence: {score:.2f})")
-                        oww_model.reset()
-                        try:
-                            stream.stop()
-                        except Exception:
-                            pass
-
-                        # Play a short greeting
-                        self.speak("Yes, sir.")
-
-                        # Immediately trigger Moonshine streaming transcription to listen for user command
-                        user_text = self.listen()
-                        if user_text and user_text.strip():
-                            print(f"[User]: {user_text}")
-                            should_continue = self.process_input(user_text)
-                            if not should_continue:
-                                break
-
-                        oww_model.reset()
-                        try:
-                            stream.start()
-                        except Exception:
-                            pass
-                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
-
-        except KeyboardInterrupt:
-            self.speak("Jarvis paused. Goodbye.")
+        return run_jarvis(self)
 
     # Method alias on VoiceAssistant
     run_jarvis = run_voice_loop
@@ -476,7 +418,7 @@ class VoiceAssistant:
 
 
 def run_jarvis(assistant: Optional[VoiceAssistant] = None):
-    """Run the main Jarvis voice assistant loop with persistent conversation history across turns."""
+    """Run the main Jarvis voice assistant infinite listening loop with local 'Hey Jarvis' wake word detection."""
     if assistant is None:
         assistant = VoiceAssistant()
         # Move messages array initialization outside and above while True loop for persistent context
@@ -486,12 +428,64 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
         messages = assistant.conversation_history
     assistant.messages = messages
 
-    while True:
-        try:
-            return assistant.run_voice_loop()
-        except KeyboardInterrupt:
-            assistant.speak("Jarvis paused. Goodbye.")
-            break
+    try:
+        import openwakeword.utils
+        openwakeword.utils.download_models(model_names=["hey_jarvis"])
+    except Exception:
+        pass
+
+    oww_model = Model(wakeword_models=["hey_jarvis"])
+    assistant.speak("Jarvis is online and ready for commands.")
+    print("\n[Jarvis]: Listening for 'Hey Jarvis' wake word...\n")
+
+    chunk_size = 1280  # 80ms audio chunk at 16kHz for openwakeword
+    sample_rate = 16000
+
+    try:
+        with sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16") as stream:
+            while True:
+                try:
+                    audio_chunk, _ = stream.read(chunk_size)
+                except (sd.PortAudioError, OSError) as mic_err:
+                    print(f"[Microphone Error]: {mic_err}")
+                    time.sleep(1.0)
+                    continue
+
+                if audio_chunk is None or len(audio_chunk) == 0:
+                    continue
+
+                prediction = oww_model.predict(audio_chunk.flatten())
+                score = prediction.get("hey_jarvis", 0.0)
+
+                if score >= 0.5:
+                    print(f"\n[Wake Word]: 'Hey Jarvis' detected! (confidence: {score:.2f})")
+                    oww_model.reset()
+                    try:
+                        stream.stop()
+                    except Exception:
+                        pass
+
+                    # Immediately call speak("Yes, sir.")
+                    assistant.speak("Yes, sir.")
+
+                    # Immediately trigger Moonshine streaming transcription to listen for user command
+                    user_text = assistant.listen()
+                    if user_text and user_text.strip():
+                        print(f"[User]: {user_text}")
+                        # Execute the tool/LLM response
+                        should_continue = assistant.process_input(user_text)
+                        if not should_continue:
+                            break
+
+                    oww_model.reset()
+                    try:
+                        stream.start()
+                    except Exception:
+                        pass
+                    print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+
+    except KeyboardInterrupt:
+        assistant.speak("Jarvis paused. Goodbye.")
 
 
 def main():
