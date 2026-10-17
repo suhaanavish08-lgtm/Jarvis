@@ -213,7 +213,7 @@ def control_spotify(action: str, query: str = "") -> Tuple[bool, str]:
             time.sleep(2.5)                # Wait for search results
             # Double-click the massive Top Result card (works reliably when maximized)
             screen_w, screen_h = pyautogui.size()
-            pyautogui.doubleClick(x=screen_w * 0.35, y=screen_h * 0.35)
+            pyautogui.doubleClick(x=screen_w * 0.40, y=screen_h * 0.22)
             return True, f"Playing {clean_query} on Spotify."
         else:
             return False, f"Unknown Spotify action: {action}"

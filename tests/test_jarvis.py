@@ -214,7 +214,7 @@ class TestSpotifyControls(unittest.TestCase):
         mock_press.assert_any_call("backspace")
         mock_write.assert_called_with("The Hills")
         mock_press.assert_any_call("enter")
-        mock_double_click.assert_called_with(x=672.0, y=378.0)
+        mock_double_click.assert_called_with(x=768.0, y=237.6)
         self.assertIn("Playing The Hills on Spotify", msg)
 
     def test_spotify_unknown_action(self):
