@@ -5,7 +5,7 @@ An ultra-responsive local voice assistant running offline with local LLM reasoni
 ## Architecture
 
 - **LLM Reasoning**: [Ollama](https://ollama.com/) with customized `jarvis` model (based on `llama3.2` with temperature 0.2).
-- **Speech-to-Text (STT)**: Moonshine (`moonshine-voice` CPU streaming transcription with built-in VAD) for instant, local speech-to-text without GPU dependencies.
+- **Speech-to-Text (STT)**: Faster-Whisper (`small.en` on CPU with int8 quantization and 0.7s silence VAD) for high-accuracy local speech-to-text without GPU dependencies.
 - **Neural Text-to-Speech (TTS)**: `kokoro-onnx` with Kokoro-82M model and `am_michael` / `am_onyx` voice embeddings (Orbit-like deep, energetic male AI voice) played via `sounddevice`.
 - **System Control**: `src/tools/system_ctrl.py` monitoring CPU, RAM, disk, battery, and launching applications (Antigravity IDE, Spotify, Notepad, Calculator, etc.).
 

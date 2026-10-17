@@ -571,24 +571,42 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assertFalse(should_continue)
         mock_speak.assert_called_with("Shutting down. Have a wonderful day, sir.")
 
-    def test_listen_silent_room_timeout(self):
-        mock_mic = MagicMock()
-        with patch.object(VoiceAssistant, "transcriber", new_callable=PropertyMock) as mock_prop:
-            mock_prop.return_value = mock_mic
-            result = self.assistant.listen(timeout=0.05)
-            self.assertIsNone(result)
-            mock_mic.start.assert_called_once()
-            mock_mic.stop.assert_called_once()
+    @patch("sounddevice.InputStream")
+    def test_listen_silent_room_timeout(self, mock_stream_cls):
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = (np.zeros(1024, dtype=np.int16), False)
+        mock_stream_cls.return_value.__enter__.return_value = mock_stream
+
+        result = self.assistant.listen(timeout=0.05)
+        self.assertIsNone(result)
+        mock_stream_cls.assert_called_with(samplerate=16000, channels=1, dtype="int16")
 
     @patch("time.sleep")
-    def test_listen_microphone_disconnection_resilience(self, mock_sleep):
-        mock_mic = MagicMock()
-        mock_mic.start.side_effect = OSError("Audio device disconnected")
-        with patch.object(VoiceAssistant, "transcriber", new_callable=PropertyMock) as mock_prop:
-            mock_prop.return_value = mock_mic
-            result = self.assistant.listen()
-            self.assertIsNone(result)
-            mock_sleep.assert_called_with(1.0)
+    @patch("sounddevice.InputStream")
+    def test_listen_microphone_disconnection_resilience(self, mock_stream_cls, mock_sleep):
+        mock_stream_cls.side_effect = OSError("Audio device disconnected")
+        result = self.assistant.listen()
+        self.assertIsNone(result)
+        mock_sleep.assert_called_with(1.0)
+
+    @patch("main.stt_model.transcribe")
+    @patch("sounddevice.InputStream")
+    def test_listen_speech_transcription(self, mock_stream_cls, mock_transcribe):
+        mock_stream = MagicMock()
+        speech_chunk = np.full((1024, 1), 3000, dtype=np.int16)
+        silent_chunk = np.zeros((1024, 1), dtype=np.int16)
+        chunks = [speech_chunk] + [silent_chunk] * 12
+        mock_stream.read.side_effect = [(c, False) for c in chunks]
+        mock_stream_cls.return_value.__enter__.return_value = mock_stream
+
+        seg_mock = MagicMock()
+        seg_mock.text = " Hello Jarvis "
+        mock_transcribe.return_value = ([seg_mock], None)
+
+        result = self.assistant.listen()
+        self.assertEqual(result, "Hello Jarvis")
+        mock_transcribe.assert_called_with("temp_dictation.wav", beam_size=5, condition_on_previous_text=False)
+        self.assertFalse(os.path.exists("temp_dictation.wav"))
 
     @patch("main.Model")
     @patch("sounddevice.InputStream")
@@ -613,24 +631,23 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
     @patch("main.is_audio_playing", return_value=True)
     @patch("sounddevice.stop")
-    def test_barge_in_interruption_stops_playback(self, mock_stop, mock_is_playing):
-        mock_mic = MagicMock()
+    @patch("main.stt_model.transcribe")
+    @patch("sounddevice.InputStream")
+    def test_barge_in_interruption_stops_playback(self, mock_stream_cls, mock_transcribe, mock_stop, mock_is_playing):
+        mock_stream = MagicMock()
+        speech_chunk = np.full((1024, 1), 3000, dtype=np.int16)
+        silent_chunk = np.zeros((1024, 1), dtype=np.int16)
+        chunks = [speech_chunk] + [silent_chunk] * 12
+        mock_stream.read.side_effect = [(c, False) for c in chunks]
+        mock_stream_cls.return_value.__enter__.return_value = mock_stream
 
-        def fake_start():
-            on_text_handler = mock_mic.on_text.call_args[0][0]
-            on_text_handler("Stop talking")
-            on_line_handler = mock_mic.on_line.call_args[0][0]
-            line_mock = MagicMock()
-            line_mock.text = "Stop talking and open Spotify"
-            on_line_handler(line_mock)
+        seg_mock = MagicMock()
+        seg_mock.text = " Stop music "
+        mock_transcribe.return_value = ([seg_mock], None)
 
-        mock_mic.start.side_effect = fake_start
-
-        with patch.object(VoiceAssistant, "transcriber", new_callable=PropertyMock) as mock_prop:
-            mock_prop.return_value = mock_mic
-            result = self.assistant.listen(timeout=1.0)
-            mock_stop.assert_called()
-            self.assertEqual(result, "Stop talking and open Spotify")
+        result = self.assistant.listen(timeout=1.0)
+        mock_stop.assert_called()
+        self.assertEqual(result, "Stop music")
 
     @patch("ollama.chat")
     def test_persistent_context_follow_up_turns(self, mock_ollama_chat):

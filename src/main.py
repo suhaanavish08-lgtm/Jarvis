@@ -1,4 +1,4 @@
-"""Jarvis: Local AI Voice Assistant with Kokoro TTS, Moonshine STT, and Spotify control."""
+"""Jarvis: Local AI Voice Assistant with Kokoro TTS, Whisper STT, and Spotify control."""
 
 import argparse
 import io
@@ -10,9 +10,11 @@ import threading
 import time
 from typing import Optional, List, Tuple
 
+from faster_whisper import WhisperModel
 from kokoro_onnx import Kokoro
 import numpy as np
 import requests
+import scipy.io.wavfile as wav
 import sounddevice as sd
 import soundfile as sf
 
@@ -21,12 +23,11 @@ try:
 except ImportError:
     ollama = None
 
-try:
-    from moonshine_voice import MicTranscriber
-except ImportError:
-    MicTranscriber = None
-
 from openwakeword.model import Model
+
+# Initialize Faster-Whisper model on CPU with int8 quantization
+stt_model = WhisperModel("small.en", device="cpu", compute_type="int8")
+
 
 from tools.system_ctrl import (
     handle_system_command,
@@ -198,22 +199,100 @@ def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
         print(f"[Kokoro TTS Error]: {e}")
 
 
+def listen(
+    threshold: int = 500,
+    silence_duration: float = 0.7,
+    timeout: Optional[float] = None,
+    max_silent_time: float = 8.0,
+    chunk_size: int = 1024,
+    samplerate: int = 16000,
+    **kwargs,
+) -> Optional[str]:
+    """Record microphone audio via sounddevice, detect speech, stop after 0.7s silence, and transcribe via Whisper."""
+    global _playback_end_time
+    effective_timeout = timeout if timeout is not None else max_silent_time
+    print("[Listening for speech...]")
+
+    audio_chunks: List[np.ndarray] = []
+    is_recording = False
+    silence_samples = 0
+    silence_limit_samples = int(silence_duration * samplerate)
+    initial_silence_samples = 0
+    max_initial_samples = int(effective_timeout * samplerate) if effective_timeout is not None else None
+
+    try:
+        with sd.InputStream(samplerate=samplerate, channels=1, dtype="int16") as stream:
+            while True:
+                chunk, _ = stream.read(chunk_size)
+                vol = np.max(np.abs(chunk))
+
+                if not is_recording:
+                    if vol > threshold:
+                        is_recording = True
+                        audio_chunks.append(chunk)
+                        silence_samples = 0
+                        if is_audio_playing():
+                            print("[Interruption detected! Stopping speech playback...]")
+                            try:
+                                sd.stop()
+                            except Exception:
+                                pass
+                            _playback_end_time = 0.0
+                    else:
+                        initial_silence_samples += len(chunk)
+                        if max_initial_samples is not None and initial_silence_samples >= max_initial_samples:
+                            return None
+                else:
+                    audio_chunks.append(chunk)
+                    if vol < threshold:
+                        silence_samples += len(chunk)
+                        if silence_samples >= silence_limit_samples:
+                            break
+                    else:
+                        silence_samples = 0
+
+        if not audio_chunks:
+            return None
+
+        audio_data = np.concatenate(audio_chunks, axis=0)
+        temp_file = "temp_dictation.wav"
+        wav.write(temp_file, samplerate, audio_data)
+
+        try:
+            segments, _ = stt_model.transcribe(
+                temp_file,
+                beam_size=5,
+                condition_on_previous_text=False,
+            )
+            text = " ".join(s.text for s in segments).strip()
+        finally:
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
+
+        return text if text else None
+
+    except (sd.PortAudioError, OSError) as audio_err:
+        print(f"[Microphone Error]: Audio device unavailable or disconnected: {audio_err}")
+        time.sleep(1.0)
+        return None
+    except Exception as exc:
+        print(f"[Audio Error]: {exc}")
+        return None
+
+
 class VoiceAssistant:
     def __init__(self, model_name: str = "jarvis", voice: str = CHOSEN_VOICE, **kwargs):
         self.model_name = model_name
         self.voice = voice
         self.conversation_history = []
         self.messages = self.conversation_history
-        self._transcriber = None
+        self._transcriber = stt_model
 
     @property
     def transcriber(self):
-        if self._transcriber is None:
-            if MicTranscriber is None:
-                raise RuntimeError("moonshine-voice is not installed.")
-            print("[Jarvis] Loading Moonshine CPU transcription model...")
-            self._transcriber = MicTranscriber()
-            self._transcriber.load()
         return self._transcriber
 
     def speak(self, text: str):
@@ -226,63 +305,7 @@ class VoiceAssistant:
         max_silent_time: float = 8.0,
         **kwargs,
     ) -> Optional[str]:
-        """Record and stream audio dynamically via Moonshine CPU transcription with built-in VAD."""
-        global _playback_end_time
-        effective_timeout = timeout if timeout is not None else max_silent_time
-        print("[Listening for speech...]")
-
-        if MicTranscriber is None:
-            print("[Transcriber Error]: moonshine-voice is not installed.")
-            return None
-
-        result_text: Optional[str] = None
-        done_event = threading.Event()
-
-        def on_text_callback(in_progress_text: str):
-            nonlocal result_text
-            text = in_progress_text.strip()
-            if text:
-                result_text = text
-                # Voice Interruption (Barge-in): cut off playback if user speaks while audio is playing
-                if is_audio_playing():
-                    print("[Interruption detected! Stopping speech playback...]")
-                    try:
-                        sd.stop()
-                    except Exception:
-                        pass
-                    global _playback_end_time
-                    _playback_end_time = 0.0
-
-        def on_line_callback(line):
-            nonlocal result_text
-            text = getattr(line, "text", str(line)).strip()
-            if text:
-                result_text = text
-                done_event.set()
-
-        try:
-            mic = self.transcriber
-            mic.on_text(on_text_callback)
-            mic.on_line(on_line_callback)
-            mic.start()
-            try:
-                done_event.wait(timeout=effective_timeout)
-            finally:
-                mic.stop()
-
-            if result_text and result_text.strip():
-                clean_result = result_text.strip()
-                return clean_result
-            return None
-
-        except (sd.PortAudioError, OSError) as audio_err:
-            print(f"[Microphone Error]: Audio device unavailable or disconnected: {audio_err}")
-            time.sleep(1.0)
-            return None
-        except Exception as exc:
-            print(f"[Audio Error]: {exc}")
-            self.speak("I encountered an error, sir.")
-            return None
+        return listen(timeout=timeout, max_silent_time=max_silent_time, **kwargs)
 
     def query_ollama(self, user_prompt: str) -> str:
         """Send prompt to Ollama running the local jarvis model with safe tool calling support."""
@@ -472,7 +495,7 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                     # Immediately call speak("Yes, sir.")
                     assistant.speak("Yes, sir.")
 
-                    # Immediately trigger Moonshine streaming transcription to listen for user command
+                    # Immediately trigger Whisper transcription to listen for user command
                     user_text = assistant.listen()
                     if user_text and user_text.strip():
                         print(f"[User]: {user_text}")
@@ -493,7 +516,7 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant (Kokoro TTS & Moonshine STT)")
+    parser = argparse.ArgumentParser(description="Jarvis Local Voice Assistant (Kokoro TTS & Whisper STT)")
     parser.add_argument("--cli", action="store_true", help="Run in text CLI mode instead of microphone voice loop")
     parser.add_argument("--model", type=str, default="jarvis", help="Ollama model name (default: jarvis)")
     parser.add_argument("--voice", type=str, default=CHOSEN_VOICE, help="Kokoro voice (default: bm_daniel)")
