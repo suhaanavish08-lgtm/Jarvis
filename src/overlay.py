@@ -14,7 +14,7 @@ root.attributes("-topmost", True)
 root.config(bg="black")
 root.attributes("-transparentcolor", "black")
 
-# Window placement at bottom center of screen: w = 300, h = 100
+# Window placement centered accurately at bottom of screen: w = 300, h = 100
 screen_w = root.winfo_screenwidth()
 screen_h = root.winfo_screenheight()
 w = 300
@@ -28,7 +28,7 @@ canvas.pack(fill="both", expand=True)
 
 # Google Dots: Blue (#4285F4), Red (#EA4335), Yellow (#FBBC05), Green (#34A853)
 DOT_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"]
-# Four horizontal dots spaced evenly across the center of the canvas
+# Four horizontal dots spaced evenly across the center of the canvas (width=300, center=150)
 dot_x_positions = [90.0, 130.0, 170.0, 210.0]
 dots = [
     canvas.create_oval(0, 0, 0, 0, fill=color, outline="")
@@ -48,7 +48,7 @@ except Exception:
 
 
 def update_animation():
-    """Update Google-style dots animation and window visibility based on JARVIS_STATE."""
+    """Update Google-style dots animation (60 FPS) and window visibility based on JARVIS_STATE."""
     global JARVIS_STATE, current_radii, current_radius
     cy = h / 2.0
 
@@ -71,13 +71,14 @@ def update_animation():
             except Exception:
                 pass
 
-            # Wave effect: modulate Y-coordinate of each dot using math.sin(time.time() * 5 + offset)
-            # offset increases for each dot from left to right (0.0, 0.8, 1.6, 2.4)
-            r = 9.0
+            # Wave effect: smooth math.sin wave modulating Y-coordinate of each dot
+            # Offset increases for each dot from left to right (0.0, 0.75, 1.5, 2.25)
+            # Perfect 20x20 circles (r = 10.0) ensuring width and height of bounding box are identical
+            r = 10.0
             now = time.time()
             for i, dot in enumerate(dots):
-                offset = i * 0.8
-                bounce = 14.0 * math.sin(now * 5.0 + offset)
+                offset = i * 0.75
+                bounce = 12.0 * math.sin(now * 4.5 + offset)
                 dot_y = cy + bounce
                 dot_x = dot_x_positions[i]
                 canvas.coords(dot, dot_x - r, dot_y - r, dot_x + r, dot_y + r)
@@ -90,24 +91,24 @@ def update_animation():
                 pass
 
             # Apply target-smoothing algorithm: current_radius += (target_radius - current_radius) * 0.3
-            # Generating new random target_radius values rapidly to simulate lip-syncing equalizer bars
-            r_x = 9.0
+            # Perfect circular pulsing ensuring identical width and height bounding boxes
             for i, dot in enumerate(dots):
-                target_radius = random.uniform(8.0, 32.0)
+                target_radius = random.uniform(7.0, 16.0)
                 current_radii[i] += (target_radius - current_radii[i]) * 0.3
+                r = current_radii[i]
                 dot_x = dot_x_positions[i]
-                r_y = current_radii[i]
-                canvas.coords(dot, dot_x - r_x, cy - r_y, dot_x + r_x, cy + r_y)
+                canvas.coords(dot, dot_x - r, cy - r, dot_x + r, cy + r)
             current_radius = current_radii[0]
 
     except Exception:
         pass
 
     try:
-        root.after(30, update_animation)
+        # Upgrade animation loop to 60 FPS (16ms)
+        root.after(16, update_animation)
     except Exception:
         pass
 
 
-# Register animation loop
-root.after(30, update_animation)
+# Register animation loop at 60 FPS
+root.after(16, update_animation)

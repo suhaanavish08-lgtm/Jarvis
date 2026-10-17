@@ -806,6 +806,8 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             x1, y1, x2, y2 = coords
             self.assertTrue(x2 > x1)
             self.assertTrue(y2 > y1)
+            # Verify perfect circles (bounding box width == height)
+            self.assertAlmostEqual(x2 - x1, y2 - y1, places=5)
 
     def test_update_animation_speaking_modulates_dots(self):
         overlay.JARVIS_STATE = "speaking"
@@ -816,6 +818,8 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             x1, y1, x2, y2 = coords
             self.assertTrue(x2 > x1)
             self.assertTrue(y2 > y1)
+            # Verify perfect circles (bounding box width == height)
+            self.assertAlmostEqual(x2 - x1, y2 - y1, places=5)
 
     def test_listen_sets_and_resets_overlay_state(self):
         assistant = VoiceAssistant()
@@ -825,6 +829,20 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             mock_stream_cls.return_value.__enter__.return_value = mock_stream
             assistant.listen(timeout=0.01)
             self.assertEqual(overlay.JARVIS_STATE, "idle")
+
+    def test_is_speaking_discards_audio_frames_in_listen(self):
+        assistant = VoiceAssistant()
+        with patch("sounddevice.InputStream") as mock_stream_cls:
+            mock_stream = MagicMock()
+            mock_stream.read.return_value = (np.full((1024, 1), 3000, dtype=np.int16), False)
+            mock_stream_cls.return_value.__enter__.return_value = mock_stream
+
+            main.IS_SPEAKING = True
+            try:
+                result = assistant.listen(timeout=0.01)
+                self.assertIsNone(result)
+            finally:
+                main.IS_SPEAKING = False
 
 
 if __name__ == "__main__":

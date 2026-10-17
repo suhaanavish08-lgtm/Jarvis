@@ -329,10 +329,10 @@ def manage_volume(action: str) -> str:
             volume = cast(devices, POINTER(IAudioEndpointVolume))
 
         current = volume.GetMasterVolumeLevelScalar()
-        if act in ["up", "increase"]:
+        if act == "up":
             volume.SetMasterVolumeLevelScalar(min(1.0, current + 0.10), None)
             return "Volume increased by 10."
-        elif act in ["down", "decrease"]:
+        elif act == "down":
             volume.SetMasterVolumeLevelScalar(max(0.0, current - 0.10), None)
             return "Volume decreased by 10."
         elif act == "mute":
@@ -350,12 +350,12 @@ def manage_volume(action: str) -> str:
 
 def manage_brightness(action: str) -> str:
     """Control display brightness in fixed 10-unit steps (up, down)."""
-    act = action.strip().lower()
+    act = str(action).strip().lower()
     try:
-        if act in ["up", "increase"]:
+        if act == "up":
             sbc.set_brightness("+10")
             return "Brightness increased by 10."
-        elif act in ["down", "decrease"]:
+        elif act == "down":
             sbc.set_brightness("-10")
             return "Brightness decreased by 10."
         else:
@@ -530,7 +530,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_volume",
-            "description": "Control Windows system audio volume in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up', 'down', or 'mute'. Does not accept any numerical value, amount, or percentage.",
+            "description": "Control Windows system audio volume in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up', 'down', or 'mute'. Does not accept any numerical value, level, amount, or percentage.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -540,7 +540,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                         "description": "Audio action to perform. Only accepts 'up', 'down', or 'mute'."
                     }
                 },
-                "required": ["action"]
+                "required": ["action"],
+                "additionalProperties": False
             }
         }
     },
@@ -548,7 +549,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_brightness",
-            "description": "Control screen brightness in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up' or 'down'. Does not accept any numerical value, amount, or percentage.",
+            "description": "Control screen brightness in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up' or 'down'. Does not accept any numerical value, level, amount, or percentage.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -558,7 +559,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                         "description": "Brightness action to perform. Only accepts 'up' or 'down'."
                     }
                 },
-                "required": ["action"]
+                "required": ["action"],
+                "additionalProperties": False
             }
         }
     },

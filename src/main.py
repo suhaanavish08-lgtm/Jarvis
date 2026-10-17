@@ -171,11 +171,12 @@ def synthesize_speech(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1) 
 
 
 _playback_end_time = 0.0
+IS_SPEAKING = False
 
 
 def is_audio_playing() -> bool:
     """Check if sounddevice audio playback is currently active."""
-    global _playback_end_time
+    global _playback_end_time, IS_SPEAKING
     try:
         stream = sd.get_stream()
         if stream is not None:
@@ -186,12 +187,12 @@ def is_audio_playing() -> bool:
                 return bool(active)
     except Exception:
         pass
-    return time.time() < _playback_end_time
+    return IS_SPEAKING or (time.time() < _playback_end_time)
 
 
 def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
     """Generate and play audio non-blockingly using Kokoro TTS and sounddevice."""
-    global _playback_end_time
+    global _playback_end_time, IS_SPEAKING
     print(f"\n[Jarvis]: {text}\n")
     if not text or not text.strip():
         return
@@ -201,17 +202,25 @@ def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
             duration = len(combined) / sample_rate
             _playback_end_time = time.time() + duration
             overlay.JARVIS_STATE = "speaking"
+            IS_SPEAKING = True
             sd.play(combined, sample_rate)
 
-            def _reset_speaking(d):
-                time.sleep(d)
+            def _reset_speaking(end_time):
+                global IS_SPEAKING
+                wait_duration = max(0.0, end_time - time.time())
+                time.sleep(wait_duration)
                 if time.time() >= _playback_end_time:
                     overlay.JARVIS_STATE = "idle"
+                # Add a 0.4s flush delay immediately after speaking finishes before allowing mic
+                time.sleep(0.4)
+                if time.time() >= _playback_end_time:
+                    IS_SPEAKING = False
 
-            threading.Thread(target=_reset_speaking, args=(duration,), daemon=True).start()
+            threading.Thread(target=_reset_speaking, args=(_playback_end_time,), daemon=True).start()
     except Exception as e:
         print(f"[Kokoro TTS Error]: {e}")
         overlay.JARVIS_STATE = "idle"
+        IS_SPEAKING = False
 
 
 def listen(
@@ -224,7 +233,7 @@ def listen(
     **kwargs,
 ) -> Optional[str]:
     """Record microphone audio via sounddevice, detect speech, stop after 0.7s silence, and transcribe via Whisper."""
-    global _playback_end_time
+    global _playback_end_time, IS_SPEAKING
     effective_timeout = timeout if timeout is not None else max_silent_time
     print("[Listening for speech...]")
     overlay.JARVIS_STATE = "listening"
@@ -236,10 +245,19 @@ def listen(
     initial_silence_samples = 0
     max_initial_samples = int(effective_timeout * samplerate) if effective_timeout is not None else None
 
+    start_time = time.time()
     try:
         with sd.InputStream(samplerate=samplerate, channels=1, dtype="int16") as stream:
             while True:
+                if effective_timeout is not None and (time.time() - start_time) >= effective_timeout:
+                    return None
+
                 chunk, _ = stream.read(chunk_size)
+                # Immediately discard any incoming audio frames if IS_SPEAKING == True
+                if IS_SPEAKING:
+                    time.sleep(0.01)
+                    continue
+
                 vol = np.max(np.abs(chunk))
 
                 if not is_recording:
@@ -507,6 +525,11 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                         continue
 
                     if audio_chunk is None or len(audio_chunk) == 0:
+                        continue
+
+                    # Immediately discard any incoming audio frames if IS_SPEAKING == True
+                    if IS_SPEAKING:
+                        time.sleep(0.01)
                         continue
 
                     # Mic Boost: multiply chunk by 2.5, clip to np.int16
