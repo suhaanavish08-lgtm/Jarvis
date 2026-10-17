@@ -764,42 +764,46 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
 
 class TestJarvisVisualOverlay(unittest.TestCase):
-    """Test top-center visual overlay state management and animation logic."""
+    """Test bottom-center Google Assistant-style visual overlay state management and animation logic."""
 
     def test_initial_state_idle(self):
         self.assertIn(overlay.JARVIS_STATE, ["idle", "listening", "speaking"])
         self.assertIsNotNone(overlay.root)
         self.assertIsNotNone(overlay.canvas)
-        self.assertIsNotNone(overlay.orb)
-        self.assertEqual(len(overlay.ovals), 3)
+        self.assertEqual(len(overlay.dots), 4)
+        self.assertEqual(overlay.DOT_COLORS, ["#4285F4", "#EA4335", "#FBBC05", "#34A853"])
 
     def test_overlay_geometry(self):
-        self.assertEqual(overlay.w, 150)
-        self.assertEqual(overlay.y, 10)
+        self.assertEqual(overlay.w, 300)
+        self.assertEqual(overlay.h, 100)
+        self.assertEqual(overlay.y, overlay.screen_h - 120)
 
-    def test_update_animation_idle_shrinks_orb(self):
+    def test_update_animation_idle_shrinks_dots(self):
         overlay.JARVIS_STATE = "idle"
         overlay.update_animation()
-        coords = overlay.canvas.coords(overlay.orb)
-        self.assertEqual(coords, [0.0, 0.0, 0.0, 0.0])
+        for dot in overlay.dots:
+            coords = overlay.canvas.coords(dot)
+            self.assertEqual(coords, [0.0, 0.0, 0.0, 0.0])
 
-    def test_update_animation_listening_expands_orb(self):
+    def test_update_animation_listening_wave_effect(self):
         overlay.JARVIS_STATE = "listening"
         overlay.update_animation()
-        coords = overlay.canvas.coords(overlay.orb)
-        self.assertEqual(len(coords), 4)
-        x1, y1, x2, y2 = coords
-        self.assertTrue(x2 > x1)
-        self.assertTrue(y2 > y1)
+        for dot in overlay.dots:
+            coords = overlay.canvas.coords(dot)
+            self.assertEqual(len(coords), 4)
+            x1, y1, x2, y2 = coords
+            self.assertTrue(x2 > x1)
+            self.assertTrue(y2 > y1)
 
-    def test_update_animation_speaking_modulates_orb(self):
+    def test_update_animation_speaking_modulates_dots(self):
         overlay.JARVIS_STATE = "speaking"
         overlay.update_animation()
-        coords = overlay.canvas.coords(overlay.orb)
-        self.assertEqual(len(coords), 4)
-        x1, y1, x2, y2 = coords
-        self.assertTrue(x2 > x1)
-        self.assertTrue(y2 > y1)
+        for dot in overlay.dots:
+            coords = overlay.canvas.coords(dot)
+            self.assertEqual(len(coords), 4)
+            x1, y1, x2, y2 = coords
+            self.assertTrue(x2 > x1)
+            self.assertTrue(y2 > y1)
 
     def test_listen_sets_and_resets_overlay_state(self):
         assistant = VoiceAssistant()
