@@ -313,7 +313,7 @@ def search_web(query: str, max_results: int = 3) -> str:
 
 
 def manage_volume(action: str) -> str:
-    """Control Windows system audio volume using pycaw (up, down, mute)."""
+    """Control Windows system audio volume in fixed 10-unit steps using pycaw (up, down, mute)."""
     act = action.strip().lower()
     try:
         devices = AudioUtilities.GetSpeakers()
@@ -328,23 +328,19 @@ def manage_volume(action: str) -> str:
         else:
             volume = cast(devices, POINTER(IAudioEndpointVolume))
 
-        scalar = volume.GetMasterVolumeLevelScalar()
+        current = volume.GetMasterVolumeLevelScalar()
         if act in ["up", "increase"]:
-            new_vol = min(1.0, round(scalar + 0.10, 2))
-            volume.SetMasterVolumeLevelScalar(new_vol, None)
-            return f"System volume increased to {int(round(new_vol * 100))}%."
+            volume.SetMasterVolumeLevelScalar(min(1.0, current + 0.10), None)
+            return "Volume increased by 10."
         elif act in ["down", "decrease"]:
-            new_vol = max(0.0, round(scalar - 0.10, 2))
-            volume.SetMasterVolumeLevelScalar(new_vol, None)
-            return f"System volume decreased to {int(round(new_vol * 100))}%."
+            volume.SetMasterVolumeLevelScalar(max(0.0, current - 0.10), None)
+            return "Volume decreased by 10."
         elif act == "mute":
-            is_muted = volume.GetMute()
-            new_mute = 0 if is_muted else 1
-            volume.SetMute(new_mute, None)
-            return "System audio unmuted." if new_mute == 0 else "System audio muted."
+            volume.SetMute(1, None)
+            return "Volume muted."
         elif act == "unmute":
             volume.SetMute(0, None)
-            return "System audio unmuted."
+            return "Volume unmuted."
         else:
             return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute'."
     except Exception as exc:
@@ -353,25 +349,17 @@ def manage_volume(action: str) -> str:
 
 
 def manage_brightness(action: str) -> str:
-    """Control display brightness in 10-unit steps (up, down, mute)."""
+    """Control display brightness in fixed 10-unit steps (up, down)."""
     act = action.strip().lower()
     try:
-        brightness_val = sbc.get_brightness()
-        current = brightness_val[0] if isinstance(brightness_val, (list, tuple)) else brightness_val
-
         if act in ["up", "increase"]:
-            new_val = min(100, current + 10)
-            sbc.set_brightness(new_val)
-            return f"Screen brightness increased to {new_val}%."
+            sbc.set_brightness("+10")
+            return "Brightness increased by 10."
         elif act in ["down", "decrease"]:
-            new_val = max(0, current - 10)
-            sbc.set_brightness(new_val)
-            return f"Screen brightness decreased to {new_val}%."
-        elif act == "mute":
-            sbc.set_brightness(0)
-            return "Screen brightness muted."
+            sbc.set_brightness("-10")
+            return "Brightness decreased by 10."
         else:
-            return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down', 'mute'."
+            return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down'."
     except Exception as exc:
         print(f"[Debug Error]: {exc}")
         return "Unable to adjust brightness, sir."
@@ -542,14 +530,14 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_volume",
-            "description": "Control Windows system audio volume. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs.",
+            "description": "Control Windows system audio volume in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up', 'down', or 'mute'. Does not accept any numerical value, amount, or percentage.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["up", "down", "mute"],
-                        "description": "Audio action to perform. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs."
+                        "description": "Audio action to perform. Only accepts 'up', 'down', or 'mute'."
                     }
                 },
                 "required": ["action"]
@@ -560,14 +548,14 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_brightness",
-            "description": "Control screen brightness in safe 10-unit steps. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs.",
+            "description": "Control screen brightness in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up' or 'down'. Does not accept any numerical value, amount, or percentage.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["up", "down", "mute"],
-                        "description": "Brightness action to perform. Only accepts 'up', 'down', or 'mute' as actions, strictly forbidding raw number inputs."
+                        "enum": ["up", "down"],
+                        "description": "Brightness action to perform. Only accepts 'up' or 'down'."
                     }
                 },
                 "required": ["action"]

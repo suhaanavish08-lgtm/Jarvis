@@ -311,34 +311,31 @@ class TestOmniTools(unittest.TestCase):
 
         msg_up = manage_volume("up")
         mock_volume.SetMasterVolumeLevelScalar.assert_called_with(0.60, None)
-        self.assertIn("increased", msg_up.lower())
+        self.assertEqual(msg_up, "Volume increased by 10.")
 
         msg_down = manage_volume("down")
         mock_volume.SetMasterVolumeLevelScalar.assert_called_with(0.40, None)
-        self.assertIn("decreased", msg_down.lower())
+        self.assertEqual(msg_down, "Volume decreased by 10.")
 
         msg_mute = manage_volume("mute")
         mock_volume.SetMute.assert_called_with(1, None)
-        self.assertIn("muted", msg_mute.lower())
+        self.assertEqual(msg_mute, "Volume muted.")
 
-        mock_volume.GetMute.return_value = 1
-        msg_unmute = manage_volume("mute")
+        msg_unmute = manage_volume("unmute")
         mock_volume.SetMute.assert_called_with(0, None)
-        self.assertIn("unmuted", msg_unmute.lower())
+        self.assertEqual(msg_unmute, "Volume unmuted.")
 
     @patch("screen_brightness_control.set_brightness")
-    @patch("screen_brightness_control.get_brightness")
-    def test_manage_brightness(self, mock_get_brightness, mock_set_brightness):
-        mock_get_brightness.return_value = [50]
+    def test_manage_brightness(self, mock_set_brightness):
         msg_up = manage_brightness("up")
-        mock_set_brightness.assert_called_with(60)
-        self.assertIn("increased", msg_up.lower())
+        mock_set_brightness.assert_called_with("+10")
+        self.assertEqual(msg_up, "Brightness increased by 10.")
 
         msg_down = manage_brightness("down")
-        mock_set_brightness.assert_called_with(40)
-        self.assertIn("decreased", msg_down.lower())
+        mock_set_brightness.assert_called_with("-10")
+        self.assertEqual(msg_down, "Brightness decreased by 10.")
 
-        mock_get_brightness.side_effect = Exception("Display error")
+        mock_set_brightness.side_effect = Exception("Display error")
         msg_err = manage_brightness("up")
         self.assertIn("unable", msg_err.lower())
 
@@ -503,9 +500,7 @@ class TestLLMToolCalling(unittest.TestCase):
 
     @patch("ollama.chat")
     @patch("screen_brightness_control.set_brightness")
-    @patch("screen_brightness_control.get_brightness")
-    def test_tool_calling_manage_brightness(self, mock_get_brightness, mock_sbc, mock_ollama_chat):
-        mock_get_brightness.return_value = [50]
+    def test_tool_calling_manage_brightness(self, mock_sbc, mock_ollama_chat):
         mock_ollama_chat.return_value = {
             "message": {
                 "role": "assistant",
@@ -522,9 +517,26 @@ class TestLLMToolCalling(unittest.TestCase):
         }
 
         reply = self.assistant.query_ollama("Increase brightness")
-        mock_sbc.assert_called_with(60)
+        mock_sbc.assert_called_with("+10")
         self.assertIn("Certainly, sir", reply)
-        self.assertIn("increased", reply.lower())
+        self.assertIn("Brightness increased by 10", reply)
+
+    def test_volume_and_brightness_tool_schemas(self):
+        from src.tools.system_ctrl import TOOL_SCHEMAS
+        schemas_by_name = {s["function"]["name"]: s["function"] for s in TOOL_SCHEMAS}
+        vol_schema = schemas_by_name["manage_volume"]
+        bright_schema = schemas_by_name["manage_brightness"]
+
+        # Ensure value, amount, percentage are completely deleted
+        for forbidden in ["value", "amount", "percentage"]:
+            self.assertNotIn(forbidden, vol_schema["parameters"]["properties"])
+            self.assertNotIn(forbidden, bright_schema["parameters"]["properties"])
+
+        # Check allowed action enums
+        self.assertEqual(vol_schema["parameters"]["properties"]["action"]["enum"], ["up", "down", "mute"])
+        self.assertEqual(bright_schema["parameters"]["properties"]["action"]["enum"], ["up", "down"])
+        self.assertEqual(vol_schema["parameters"]["required"], ["action"])
+        self.assertEqual(bright_schema["parameters"]["required"], ["action"])
 
     @patch("ollama.chat")
     def test_tool_calling_capture_screen(self, mock_ollama_chat):
