@@ -159,6 +159,55 @@ class TestAppLaunching(unittest.TestCase):
         self.assertFalse(success)
         self.assertEqual(msg, "Unable to complete the request, sir.")
 
+    @patch("os.system")
+    @patch("subprocess.Popen")
+    def test_multi_app_launching_comma_and_separated(self, mock_popen, mock_os_system):
+        success, msg = open_application("chrome, spotify, and calculator")
+        self.assertTrue(success)
+        mock_os_system.assert_any_call("start chrome")
+        mock_os_system.assert_any_call("start spotify:")
+        mock_popen.assert_called_with("calc.exe", shell=True)
+        self.assertEqual(msg, "Chrome, Spotify, and Calculator opened.")
+
+    @patch("os.system")
+    @patch("subprocess.Popen")
+    def test_multi_app_launching_count_three_apps(self, mock_popen, mock_os_system):
+        success, msg = open_application("3 apps")
+        self.assertTrue(success)
+        mock_popen.assert_any_call("notepad.exe", shell=True)
+        mock_popen.assert_any_call("calc.exe", shell=True)
+        mock_os_system.assert_called_with("start https://www.google.com")
+        self.assertEqual(msg, "Notepad, Calculator, and Browser opened.")
+
+    @patch("os.system")
+    @patch("subprocess.Popen")
+    def test_handle_system_command_three_named_apps(self, mock_popen, mock_os_system):
+        success, msg = handle_system_command("open Chrome, Spotify, and Calculator")
+        self.assertTrue(success)
+        mock_os_system.assert_any_call("start chrome")
+        mock_os_system.assert_any_call("start spotify:")
+        mock_popen.assert_called_with("calc.exe", shell=True)
+        self.assertEqual(msg, "Chrome, Spotify, and Calculator opened.")
+
+    @patch("os.system")
+    @patch("subprocess.Popen")
+    def test_handle_system_command_three_generic_apps(self, mock_popen, mock_os_system):
+        success, msg = handle_system_command("open 3 apps")
+        self.assertTrue(success)
+        mock_popen.assert_any_call("notepad.exe", shell=True)
+        mock_popen.assert_any_call("calc.exe", shell=True)
+        mock_os_system.assert_called_with("start https://www.google.com")
+        self.assertEqual(msg, "Notepad, Calculator, and Browser opened.")
+
+    @patch("os.system")
+    @patch("subprocess.Popen")
+    def test_handle_system_command_two_apps(self, mock_popen, mock_os_system):
+        success, msg = handle_system_command("launch spotify and calculator")
+        self.assertTrue(success)
+        mock_os_system.assert_called_with("start spotify:")
+        mock_popen.assert_called_with("calc.exe", shell=True)
+        self.assertEqual(msg, "Spotify and Calculator opened.")
+
 
 class TestSpotifyControls(unittest.TestCase):
     """Test control_spotify actions, running safeguards, and search focus handling."""

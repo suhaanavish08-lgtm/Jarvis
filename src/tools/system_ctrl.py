@@ -103,14 +103,26 @@ def _resolve_antigravity_path() -> str | None:
     return None
 
 
-def open_application(app_name: str) -> Tuple[bool, str]:
-    """Launch designated applications via dictionary mapping or universal Windows Start Search fallback."""
+DEFAULT_APPLICATIONS: List[str] = ["notepad", "calculator", "browser", "task manager", "file explorer"]
+
+WORD_TO_NUM: Dict[str, int] = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+}
+
+
+def _launch_single_app(target: str) -> Tuple[bool, str]:
+    """Launch a single application by name using dictionary mapping or Windows Start Search."""
     try:
-        if not app_name or not app_name.strip():
+        if not target or not target.strip():
             return False, "Application name cannot be empty."
 
-        # Normalize name: strip quotes, whitespace, and convert to lower case
-        name_clean = app_name.strip().strip("'\"").strip().lower()
+        name_clean = target.strip().strip("'\"").strip().lower()
+        if not name_clean:
+            return False, "Application name cannot be empty."
 
         apps = {
             "bluetooth settings": "start ms-settings:bluetooth",
@@ -136,8 +148,10 @@ def open_application(app_name: str) -> Tuple[bool, str]:
             "brave": "start brave",
         }
 
-        for key, cmd in apps.items():
+        # Match longest key first so e.g. "bluetooth settings" matches before "settings"
+        for key in sorted(apps.keys(), key=len, reverse=True):
             if key in name_clean:
+                cmd = apps[key]
                 if key == "antigravity" or cmd == "agy-ide":
                     resolved = _resolve_antigravity_path()
                     if resolved:
@@ -158,6 +172,99 @@ def open_application(app_name: str) -> Tuple[bool, str]:
         time.sleep(1.0)
         pyautogui.press("enter")
         return True, f"Launching {search_target} via Windows search."
+    except Exception as e:
+        print(f"[Debug Error]: {e}")
+        return False, "Unable to complete the request, sir."
+
+
+def open_application(app_name: str) -> Tuple[bool, str]:
+    """Launch designated applications via dictionary mapping or universal Windows Start Search fallback.
+    Supports single app names, comma/and-separated lists of apps, or generic count commands like '3 apps'.
+    """
+    try:
+        if not app_name or not app_name.strip():
+            return False, "Application name cannot be empty."
+
+        clean_input = app_name.strip().strip("'\"").strip()
+        lower_input = clean_input.lower()
+
+        # Check for generic count patterns, e.g. "3 apps", "three applications"
+        count_match = re.search(r"\b(\d+|one|two|three|four|five)\s+(?:apps?|applications?)\b", lower_input)
+        req_count = None
+        if count_match:
+            c_str = count_match.group(1)
+            req_count = int(c_str) if c_str.isdigit() else WORD_TO_NUM.get(c_str, 3)
+
+        # Check if input has a colon, e.g. "3 apps: chrome, spotify, and calculator"
+        if ":" in clean_input:
+            clean_input = clean_input.split(":", 1)[1].strip()
+            lower_input = clean_input.lower()
+
+        # Strip leading trigger words like "open", "launch", "start", "run"
+        clean_input = re.sub(r"^(?:open|launch|start|run)\s+", "", clean_input, flags=re.IGNORECASE).strip()
+        lower_input = clean_input.lower()
+
+        # Check for multiple apps separated by delimiters (commas, "and", "&", "+", ";")
+        has_delimiter = any(d in lower_input for d in [",", " and ", " & ", ";", " + "])
+
+        # If count was requested without specific named apps in clean_input (e.g. "3 apps" or "three apps")
+        if req_count is not None and not has_delimiter:
+            apps_in_input = [app for app in DEFAULT_APPLICATIONS if app in lower_input]
+            if not apps_in_input:
+                targets = DEFAULT_APPLICATIONS[:req_count]
+                opened_names = []
+                for t in targets:
+                    succ, msg = _launch_single_app(t)
+                    if succ:
+                        opened_names.append(t.capitalize())
+                if opened_names:
+                    if len(opened_names) == 1:
+                        return True, f"{opened_names[0]} opened."
+                    elif len(opened_names) == 2:
+                        return True, f"{opened_names[0]} and {opened_names[1]} opened."
+                    else:
+                        return True, f"{', '.join(opened_names[:-1])}, and {opened_names[-1]} opened."
+                return False, "Unable to complete the request, sir."
+
+        if has_delimiter:
+            raw_parts = re.split(r",\s*(?:and\s+)?|\s+and\s+|\s*&\s*|\s*\+\s*|;\s*", clean_input, flags=re.IGNORECASE)
+            parts = []
+            for p in raw_parts:
+                p_clean = p.strip().strip("'\"").strip()
+                p_clean = re.sub(r"^(the|app|application)\s+", "", p_clean, flags=re.IGNORECASE).strip()
+                if p_clean and p_clean.lower() not in ["app", "apps", "application", "applications", "please"]:
+                    parts.append(p_clean)
+
+            if len(parts) > 1:
+                opened_names = []
+                all_msgs = []
+                any_success = False
+                for p in parts:
+                    succ, msg = _launch_single_app(p)
+                    if succ:
+                        any_success = True
+                        if " opened" in msg:
+                            app_display = msg.split(" opened")[0].strip()
+                        elif "Launching " in msg:
+                            app_display = msg.split("Launching ")[1].split(" via")[0].strip().capitalize()
+                        elif "Antigravity" in msg:
+                            app_display = "Antigravity"
+                        else:
+                            app_display = p.capitalize()
+                        opened_names.append(app_display)
+                    all_msgs.append(msg)
+
+                if any_success and opened_names:
+                    if len(opened_names) == 1:
+                        return True, f"{opened_names[0]} opened."
+                    elif len(opened_names) == 2:
+                        return True, f"{opened_names[0]} and {opened_names[1]} opened."
+                    else:
+                        return True, f"{', '.join(opened_names[:-1])}, and {opened_names[-1]} opened."
+                return False, " ".join(all_msgs) if all_msgs else "Unable to complete the request, sir."
+
+        # Single app launch
+        return _launch_single_app(clean_input)
     except Exception as e:
         print(f"[Debug Error]: {e}")
         return False, "Unable to complete the request, sir."
@@ -593,13 +700,13 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "open_application",
-            "description": "Launch desktop applications such as Notepad, Calculator, Spotify, Task Manager, or Antigravity.",
+            "description": "Launch desktop applications such as Notepad, Calculator, Spotify, Task Manager, or Antigravity. Supports opening a single app or multiple comma-separated apps (e.g. 'chrome, spotify, calculator').",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "app_name": {
                         "type": "string",
-                        "description": "The name of the application to open."
+                        "description": "The name of the application to open, or comma-separated list of application names (e.g. 'chrome, spotify, calculator') to open multiple apps."
                     }
                 },
                 "required": ["app_name"]
@@ -860,23 +967,80 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
 
     # App launching keywords
     launch_triggers = ["open", "launch", "start", "run"]
+    matched_trigger = None
     for trigger in launch_triggers:
-        if trigger in lower_text:
-            apps_keywords = [
-                "file explorer", "windows explorer", "explorer", "task manager", "taskmgr",
-                "bluetooth settings", "bluetooth", "settings", "brave", "browser", "chrome", "firefox", "edge",
-                "spotify", "spot if", "notepad", "calculator", "calc", "antigravity"
-            ]
-            for app in apps_keywords:
-                if app in lower_text:
-                    success, msg = open_application(app)
-                    return True, msg
+        if re.search(rf"\b{trigger}\b", lower_text):
+            matched_trigger = trigger
+            break
 
-            # If trigger is at start, try launching remainder as app name
-            remainder = lower_text[len(trigger):].strip()
-            if remainder:
+    if matched_trigger:
+        # 1. Check for count requests like "open 3 apps", "open three applications", etc.
+        count_match = re.search(r"\b(\d+|one|two|three|four|five)\s+(?:apps?|applications?)\b", lower_text)
+
+        # 2. Check which known apps are mentioned in lower_text
+        apps_keywords = [
+            "bluetooth settings", "bluetooth", "settings",
+            "file explorer", "windows explorer", "explorer",
+            "task manager", "taskmgr",
+            "calculator", "calc",
+            "notepad",
+            "spotify", "spot if",
+            "antigravity",
+            "default browser", "browser",
+            "chrome", "firefox", "edge", "brave", "msedge"
+        ]
+
+        found_apps = []
+        matched_spans = []
+        for app in sorted(apps_keywords, key=len, reverse=True):
+            for m in re.finditer(rf"\b{re.escape(app)}\b", lower_text):
+                span = m.span()
+                if not any(s[0] <= span[0] < s[1] or s[0] < span[1] <= s[1] for s in matched_spans):
+                    matched_spans.append(span)
+                    found_apps.append((span[0], app))
+
+        found_apps.sort(key=lambda x: x[0])
+        matched_app_names = [a[1] for a in found_apps]
+
+        # Case A: If 2 or more apps are explicitly mentioned
+        if len(matched_app_names) >= 2:
+            success, msg = open_application(", ".join(matched_app_names))
+            return True, msg
+
+        # Case B: If a count of apps was requested (e.g. "open 3 apps")
+        if count_match:
+            c_val = count_match.group(1)
+            req_n = int(c_val) if c_val.isdigit() else WORD_TO_NUM.get(c_val, 3)
+            if not matched_app_names:
+                success, msg = open_application(f"{req_n} apps")
+                return True, msg
+            else:
+                combined_list = list(matched_app_names)
+                for d in DEFAULT_APPLICATIONS:
+                    if len(combined_list) >= req_n:
+                        break
+                    if d not in combined_list:
+                        combined_list.append(d)
+                success, msg = open_application(", ".join(combined_list))
+                return True, msg
+
+        # Case C: If exactly 1 known app was mentioned
+        if len(matched_app_names) == 1:
+            trigger_pos = lower_text.find(matched_trigger)
+            remainder = lower_text[trigger_pos + len(matched_trigger):].strip()
+            if any(sep in remainder for sep in [",", " and ", " & "]):
                 success, msg = open_application(remainder)
                 return True, msg
+            success, msg = open_application(matched_app_names[0])
+            return True, msg
+
+        # Case D: No known app keywords found, but trigger is present
+        trigger_pos = lower_text.find(matched_trigger)
+        remainder = lower_text[trigger_pos + len(matched_trigger):].strip()
+        remainder = re.sub(r"^(up|the|a|an|app|application|apps|applications)\s+", "", remainder).strip()
+        if remainder:
+            success, msg = open_application(remainder)
+            return True, msg
 
     return False, ""
 
