@@ -313,9 +313,16 @@ def search_web(query: str, max_results: int = 3) -> str:
 
 
 def manage_volume(action: str) -> str:
-    """Control Windows system audio volume in fixed 10-unit steps using pycaw (up, down, mute)."""
+    """Control Windows system audio volume in fixed 10-unit steps using thread-safe pycaw (up, down, mute)."""
     act = action.strip().lower()
+    com_initialized = False
     try:
+        try:
+            comtypes.CoInitialize()
+            com_initialized = True
+        except Exception:
+            pass
+
         devices = AudioUtilities.GetSpeakers()
         if hasattr(devices, "EndpointVolume"):
             volume = devices.EndpointVolume
@@ -328,12 +335,12 @@ def manage_volume(action: str) -> str:
         else:
             volume = cast(devices, POINTER(IAudioEndpointVolume))
 
-        current = volume.GetMasterVolumeLevelScalar()
+        current_volume = volume.GetMasterVolumeLevelScalar()
         if act == "up":
-            volume.SetMasterVolumeLevelScalar(min(1.0, current + 0.10), None)
+            volume.SetMasterVolumeLevelScalar(min(1.0, current_volume + 0.10), None)
             return "Volume increased by 10."
         elif act == "down":
-            volume.SetMasterVolumeLevelScalar(max(0.0, current - 0.10), None)
+            volume.SetMasterVolumeLevelScalar(max(0.0, current_volume - 0.10), None)
             return "Volume decreased by 10."
         elif act == "mute":
             volume.SetMute(1, None)
@@ -346,23 +353,42 @@ def manage_volume(action: str) -> str:
     except Exception as exc:
         print(f"[Debug Error]: {exc}")
         return "Unable to complete the request, sir."
+    finally:
+        if com_initialized:
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                pass
 
 
 def manage_brightness(action: str) -> str:
-    """Control display brightness in fixed 10-unit steps (up, down)."""
+    """Control display brightness in fixed 10-unit steps using screen_brightness_control with WMI fallback."""
     act = str(action).strip().lower()
+    if act not in ["up", "down"]:
+        return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down'."
+
+    action_word = "increased" if act == "up" else "decreased"
+    step_arg = "+10" if act == "up" else "-10"
+
+    # Primary logic: screen_brightness_control
     try:
-        if act == "up":
-            sbc.set_brightness("+10")
-            return "Brightness increased by 10."
-        elif act == "down":
-            sbc.set_brightness("-10")
-            return "Brightness decreased by 10."
-        else:
-            return f"Unknown brightness action '{action}'. Valid actions: 'up', 'down'."
-    except Exception as exc:
-        print(f"[Debug Error]: {exc}")
-        return "Unable to adjust brightness, sir."
+        sbc.set_brightness(step_arg)
+        return f"Brightness {action_word} by 10."
+    except Exception as sbc_err:
+        print(f"[Debug Warning - SBC Brightness]: {sbc_err}")
+        # Fallback to direct PowerShell WMI calls
+        try:
+            cmd = (
+                f"$val = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness; "
+                f"if ('{act}' -eq 'up') {{ $val = [math]::Min(100, $val + 10) }} "
+                f"else {{ $val = [math]::Max(0, $val - 10) }}; "
+                f"(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(0, $val)"
+            )
+            subprocess.run(["powershell", "-Command", cmd], capture_output=True, timeout=5)
+            return f"Brightness {action_word} by 10."
+        except Exception as wmi_err:
+            print(f"[Debug Error - WMI Brightness]: {wmi_err}")
+            return "Unable to adjust brightness, sir."
 
 
 
@@ -530,7 +556,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_volume",
-            "description": "Control Windows system audio volume in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up', 'down', or 'mute'. Does not accept any numerical value, level, amount, or percentage.",
+            "description": "Control Windows system audio volume in fixed 10-unit steps. Under no circumstances provide numbers; only trigger 'up', 'down', or 'mute' actions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -549,7 +575,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "manage_brightness",
-            "description": "Control screen brightness in fixed 10-unit steps. Only accepts a single 'action' parameter with values 'up' or 'down'. Does not accept any numerical value, level, amount, or percentage.",
+            "description": "Control screen brightness in fixed 10-unit steps. Under no circumstances provide numbers; only trigger 'up' or 'down' actions.",
             "parameters": {
                 "type": "object",
                 "properties": {

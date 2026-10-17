@@ -325,8 +325,9 @@ class TestOmniTools(unittest.TestCase):
         mock_volume.SetMute.assert_called_with(0, None)
         self.assertEqual(msg_unmute, "Volume unmuted.")
 
+    @patch("subprocess.run")
     @patch("screen_brightness_control.set_brightness")
-    def test_manage_brightness(self, mock_set_brightness):
+    def test_manage_brightness(self, mock_set_brightness, mock_subproc):
         msg_up = manage_brightness("up")
         mock_set_brightness.assert_called_with("+10")
         self.assertEqual(msg_up, "Brightness increased by 10.")
@@ -335,7 +336,16 @@ class TestOmniTools(unittest.TestCase):
         mock_set_brightness.assert_called_with("-10")
         self.assertEqual(msg_down, "Brightness decreased by 10.")
 
+        # Test WMI fallback when SBC raises exception
         mock_set_brightness.side_effect = Exception("Display error")
+        mock_subproc.return_value = MagicMock(returncode=0)
+        msg_wmi = manage_brightness("up")
+        self.assertEqual(msg_wmi, "Brightness increased by 10.")
+        mock_subproc.assert_called_once()
+        self.assertIn("WmiMonitorBrightness", mock_subproc.call_args[0][0][2])
+
+        # Test failure when both SBC and WMI fail
+        mock_subproc.side_effect = Exception("WMI failure")
         msg_err = manage_brightness("up")
         self.assertIn("unable", msg_err.lower())
 
@@ -776,50 +786,49 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
 
 class TestJarvisVisualOverlay(unittest.TestCase):
-    """Test bottom-center Google Assistant-style visual overlay state management and animation logic."""
+    """Test top-center gradient waveform visual overlay state management and animation logic."""
 
     def test_initial_state_idle(self):
         self.assertIn(overlay.JARVIS_STATE, ["idle", "listening", "speaking"])
         self.assertIsNotNone(overlay.root)
         self.assertIsNotNone(overlay.canvas)
-        self.assertEqual(len(overlay.dots), 4)
-        self.assertEqual(overlay.DOT_COLORS, ["#4285F4", "#EA4335", "#FBBC05", "#34A853"])
+        self.assertEqual(len(overlay.bars), 50)
+        self.assertEqual(len(overlay.dots), 50)
 
     def test_overlay_geometry(self):
-        self.assertEqual(overlay.w, 300)
-        self.assertEqual(overlay.h, 100)
-        self.assertEqual(overlay.y, overlay.screen_h - 120)
+        self.assertEqual(overlay.w, 500)
+        self.assertEqual(overlay.h, 120)
+        self.assertEqual(overlay.y, 10)
 
-    def test_update_animation_idle_shrinks_dots(self):
+    def test_update_animation_idle_draws_breathing_waveform(self):
         overlay.JARVIS_STATE = "idle"
         overlay.update_animation()
-        for dot in overlay.dots:
-            coords = overlay.canvas.coords(dot)
-            self.assertEqual(coords, [0.0, 0.0, 0.0, 0.0])
+        for bar in overlay.bars:
+            coords = overlay.canvas.coords(bar)
+            self.assertEqual(len(coords), 4)
+            x1, y1, x2, y2 = coords
+            self.assertTrue(x2 > x1)
+            self.assertTrue(y2 > y1)
 
     def test_update_animation_listening_wave_effect(self):
         overlay.JARVIS_STATE = "listening"
         overlay.update_animation()
-        for dot in overlay.dots:
-            coords = overlay.canvas.coords(dot)
+        for bar in overlay.bars:
+            coords = overlay.canvas.coords(bar)
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
             self.assertTrue(x2 > x1)
             self.assertTrue(y2 > y1)
-            # Verify perfect circles (bounding box width == height)
-            self.assertAlmostEqual(x2 - x1, y2 - y1, places=5)
 
-    def test_update_animation_speaking_modulates_dots(self):
+    def test_update_animation_speaking_modulates_bars(self):
         overlay.JARVIS_STATE = "speaking"
         overlay.update_animation()
-        for dot in overlay.dots:
-            coords = overlay.canvas.coords(dot)
+        for bar in overlay.bars:
+            coords = overlay.canvas.coords(bar)
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
             self.assertTrue(x2 > x1)
             self.assertTrue(y2 > y1)
-            # Verify perfect circles (bounding box width == height)
-            self.assertAlmostEqual(x2 - x1, y2 - y1, places=5)
 
     def test_listen_sets_and_resets_overlay_state(self):
         assistant = VoiceAssistant()

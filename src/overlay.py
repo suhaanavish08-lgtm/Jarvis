@@ -1,4 +1,4 @@
-"""Bottom-center, Google Assistant-style animated multi-dot transparent visual overlay for Jarvis."""
+"""Top-center gradient waveform visualizer for Jarvis."""
 
 import math
 import random
@@ -8,39 +8,67 @@ import tkinter as tk
 JARVIS_STATE = "idle"
 
 root = tk.Tk()
-root.title("Jarvis Overlay")
+root.title("Jarvis Visualizer")
 root.overrideredirect(True)
 root.attributes("-topmost", True)
 root.config(bg="black")
 root.attributes("-transparentcolor", "black")
 
-# Window placement centered accurately at bottom of screen: w = 300, h = 100
-screen_w = root.winfo_screenwidth()
-screen_h = root.winfo_screenheight()
-w = 300
-h = 100
-x = int((screen_w - w) / 2)
-y = screen_h - 120
+# 500x120 window positioned dead center right beneath camera
+w = 500
+h = 120
+x = int((root.winfo_screenwidth() - w) / 2)
+y = 10
 root.geometry(f"{w}x{h}+{x}+{y}")
 
 canvas = tk.Canvas(root, width=w, height=h, bg="black", highlightthickness=0)
 canvas.pack(fill="both", expand=True)
 
-# Google Dots: Blue (#4285F4), Red (#EA4335), Yellow (#FBBC05), Green (#34A853)
-DOT_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"]
-# Four horizontal dots spaced evenly across the center of the canvas (width=300, center=150)
-dot_x_positions = [90.0, 130.0, 170.0, 210.0]
-dots = [
-    canvas.create_oval(0, 0, 0, 0, fill=color, outline="")
-    for color in DOT_COLORS
-]
-ovals = dots  # Backward compatibility alias
-orb = dots[0]  # Backward compatibility alias
 
-current_radii = [0.0, 0.0, 0.0, 0.0]
-current_radius = 0.0
+def get_gradient_color(t: float) -> str:
+    """Interpolate gradient from #00f3ff (cyan) to #4a80ff (blue) to #9d00ff (purple)."""
+    if t <= 0.5:
+        factor = t / 0.5
+        r = int(0 + factor * (74 - 0))
+        g = int(243 + factor * (128 - 243))
+        b = 255
+    else:
+        factor = (t - 0.5) / 0.5
+        r = int(74 + factor * (157 - 74))
+        g = int(128 + factor * (0 - 128))
+        b = 255
+    return f"#{r:02x}{g:02x}{b:02x}"
 
-# Initially hidden since state is idle
+
+num_bars = 50
+bar_w = 4.0
+bar_spacing = 8.0
+total_width = (num_bars - 1) * bar_spacing + bar_w
+start_x = (w - total_width) / 2.0
+cy = (h - 24) / 2.0  # vertical center for waveform bars
+
+bars = []
+bar_colors = []
+for i in range(num_bars):
+    t = i / float(num_bars - 1)
+    color = get_gradient_color(t)
+    bar_colors.append(color)
+    bx = start_x + i * bar_spacing
+    bar = canvas.create_rectangle(bx, cy - 2, bx + bar_w, cy + 2, fill=color, outline="")
+    bars.append(bar)
+
+status_text = canvas.create_text(w / 2, h - 14, text="", fill="#a0a0b0", font=("Segoe UI", 9, "bold"))
+
+# Aliases for backward compatibility
+dots = bars
+ovals = bars
+orb = bars[0]
+DOT_COLORS = [bar_colors[0], bar_colors[len(bar_colors) // 3], bar_colors[2 * len(bar_colors) // 3], bar_colors[-1]]
+
+current_heights = [4.0] * num_bars
+target_heights = [4.0] * num_bars
+
+# Initially hidden or subtle
 try:
     root.withdraw()
 except Exception:
@@ -48,16 +76,19 @@ except Exception:
 
 
 def update_animation():
-    """Update Google-style dots animation (60 FPS) and window visibility based on JARVIS_STATE."""
-    global JARVIS_STATE, current_radii, current_radius
-    cy = h / 2.0
+    """Update top-center gradient waveform animation at 60 FPS."""
+    global JARVIS_STATE, current_heights, target_heights
+    now = time.time()
 
     try:
         if JARVIS_STATE == "idle":
-            current_radii = [0.0, 0.0, 0.0, 0.0]
-            current_radius = 0.0
-            for dot in dots:
-                canvas.coords(dot, 0, 0, 0, 0)
+            # Tiny flat/breathing waveform with minor offset motion
+            canvas.itemconfig(status_text, text="")
+            for i, bar in enumerate(bars):
+                bx = start_x + i * bar_spacing
+                h_i = max(2.0, 3.0 + 1.8 * math.sin(now * 2.5 + i * 0.12))
+                current_heights[i] = h_i
+                canvas.coords(bar, bx, cy - h_i / 2.0, bx + bar_w, cy + h_i / 2.0)
             try:
                 if root.state() != "withdrawn":
                     root.withdraw()
@@ -71,17 +102,15 @@ def update_animation():
             except Exception:
                 pass
 
-            # Wave effect: smooth math.sin wave modulating Y-coordinate of each dot
-            # Offset increases for each dot from left to right (0.0, 0.75, 1.5, 2.25)
-            # Perfect 20x20 circles (r = 10.0) ensuring width and height of bounding box are identical
-            r = 10.0
-            now = time.time()
-            for i, dot in enumerate(dots):
-                offset = i * 0.75
-                bounce = 12.0 * math.sin(now * 4.5 + offset)
-                dot_y = cy + bounce
-                dot_x = dot_x_positions[i]
-                canvas.coords(dot, dot_x - r, dot_y - r, dot_x + r, dot_y + r)
+            canvas.itemconfig(status_text, text="LISTENING...", fill="#00f3ff")
+            amplitude = 26.0
+            for i, bar in enumerate(bars):
+                bx = start_x + i * bar_spacing
+                # Sequential height modulation producing undulating double humps
+                wave = math.sin(now * 8.0 + i * 0.15)
+                h_i = max(3.0, abs(wave) * amplitude + 4.0)
+                current_heights[i] = h_i
+                canvas.coords(bar, bx, cy - h_i / 2.0, bx + bar_w, cy + h_i / 2.0)
 
         elif JARVIS_STATE == "speaking":
             try:
@@ -90,25 +119,21 @@ def update_animation():
             except Exception:
                 pass
 
-            # Apply target-smoothing algorithm: current_radius += (target_radius - current_radius) * 0.3
-            # Perfect circular pulsing ensuring identical width and height bounding boxes
-            for i, dot in enumerate(dots):
-                target_radius = random.uniform(7.0, 16.0)
-                current_radii[i] += (target_radius - current_radii[i]) * 0.3
-                r = current_radii[i]
-                dot_x = dot_x_positions[i]
-                canvas.coords(dot, dot_x - r, cy - r, dot_x + r, cy + r)
-            current_radius = current_radii[0]
+            canvas.itemconfig(status_text, text="RECOGNIZING...", fill="#d0a0ff")
+            for i, bar in enumerate(bars):
+                bx = start_x + i * bar_spacing
+                target = random.uniform(6.0, 50.0)
+                current_heights[i] += (target - current_heights[i]) * 0.35
+                h_i = current_heights[i]
+                canvas.coords(bar, bx, cy - h_i / 2.0, bx + bar_w, cy + h_i / 2.0)
 
     except Exception:
         pass
 
     try:
-        # Upgrade animation loop to 60 FPS (16ms)
         root.after(16, update_animation)
     except Exception:
         pass
 
 
-# Register animation loop at 60 FPS
 root.after(16, update_animation)
