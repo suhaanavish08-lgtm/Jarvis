@@ -702,21 +702,42 @@ def handle_system_command(text: str) -> Tuple[bool, str]:
         msg = capture_screen()
         return True, msg
 
-    # Volume keywords
-    if "mute" in lower_text:
-        return True, manage_volume("mute")
-    if "unmute" in lower_text:
-        return True, manage_volume("unmute")
-    if "volume up" in lower_text or "turn up volume" in lower_text:
-        return True, manage_volume("up")
-    if "volume down" in lower_text or "turn down volume" in lower_text:
-        return True, manage_volume("down")
+    # Volume and Brightness keywords
+    clean_text = re.sub(r"[^\w\s]", " ", lower_text)
+    words = clean_text.split()
+    has_vol = any(w in words for w in ["volume", "audio", "sound"])
+    has_bright = any(w in words for w in ["brightness", "screen", "display", "monitor"])
+    is_up = any(w in words for w in ["up", "increase", "increased", "raise", "raised", "boost", "boosted", "higher", "high", "more", "max"])
+    is_down = any(w in words for w in ["down", "decrease", "decreased", "lower", "lowered", "reduce", "reduced", "drop", "dropped", "less"])
 
     # Brightness keywords
-    if "brightness up" in lower_text or "turn up brightness" in lower_text or "increase brightness" in lower_text:
+    if has_bright:
+        if is_up or "brighter" in words or "turn up" in clean_text or "turn it up" in clean_text or "make it brighter" in clean_text:
+            return True, manage_brightness("up")
+        if is_down or "dim" in words or "dimmed" in words or "darker" in words or "turn down" in clean_text or "turn it down" in clean_text or "make it darker" in clean_text:
+            return True, manage_brightness("down")
+
+    if "brighter" in words or "make it brighter" in clean_text:
         return True, manage_brightness("up")
-    if "brightness down" in lower_text or "turn down brightness" in lower_text or "decrease brightness" in lower_text:
+    if "dim" in words or "dimmed" in words or "darker" in words or "dim screen" in clean_text or "dim the screen" in clean_text or "make it darker" in clean_text:
         return True, manage_brightness("down")
+
+    # Volume keywords
+    if "unmute" in words and (has_vol or len(words) <= 3):
+        return True, manage_volume("unmute")
+    if ("mute" in words or "silence" in words) and (has_vol or len(words) <= 3):
+        return True, manage_volume("mute")
+
+    if has_vol:
+        if is_up or "louder" in words or "turn up" in clean_text or "turn it up" in clean_text or "make it louder" in clean_text:
+            return True, manage_volume("up")
+        if is_down or "quieter" in words or "softer" in words or "turn down" in clean_text or "turn it down" in clean_text or "make it quieter" in clean_text:
+            return True, manage_volume("down")
+
+    if "louder" in words or "make it louder" in clean_text or "turn it up" in clean_text:
+        return True, manage_volume("up")
+    if "quieter" in words or "softer" in words or "make it quieter" in clean_text or "turn it down" in clean_text:
+        return True, manage_volume("down")
 
 
     # Spotify Play/Pause keywords

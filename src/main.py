@@ -347,43 +347,55 @@ def intercept_hardware_command(text: str) -> Optional[str]:
     if not text:
         return None
     lower = text.strip().lower()
-    clean = re.sub(r"[^\w\s]", "", lower)
+    clean = re.sub(r"[^\w\s]", " ", lower)
+    words = clean.split()
 
-    # Volume Up triggers
-    vol_up_triggers = [
-        "increase volume", "volume up", "turn it up", "turn up volume",
-        "turn up the volume", "raise volume", "raise the volume", "higher volume"
-    ]
-    if any(t in clean for t in vol_up_triggers):
-        manage_volume("up")
-        return "Volume increased, sir."
+    has_vol = any(w in words for w in ["volume", "audio", "sound"])
+    has_bright = any(w in words for w in ["brightness", "screen", "display", "monitor"])
+    is_up = any(w in words for w in ["up", "increase", "increased", "raise", "raised", "boost", "boosted", "higher", "high", "more", "max"])
+    is_down = any(w in words for w in ["down", "decrease", "decreased", "lower", "lowered", "reduce", "reduced", "drop", "dropped", "less"])
 
-    # Volume Down triggers
-    vol_down_triggers = [
-        "decrease volume", "volume down", "lower volume", "lower the volume",
-        "turn it down", "turn down volume", "turn down the volume", "reduce volume"
-    ]
-    if any(t in clean for t in vol_down_triggers):
-        manage_volume("down")
-        return "Volume decreased, sir."
+    # 1. Explicit Brightness commands
+    if has_bright:
+        if is_up or "brighter" in words or "turn up" in clean or "turn it up" in clean or "make it brighter" in clean:
+            manage_brightness("up")
+            return "Brightness increased, sir."
+        if is_down or "dim" in words or "dimmed" in words or "darker" in words or "turn down" in clean or "turn it down" in clean or "make it darker" in clean:
+            manage_brightness("down")
+            return "Brightness decreased, sir."
 
-    # Brightness Up triggers
-    bright_up_triggers = [
-        "increase brightness", "brightness up", "turn up brightness",
-        "turn up the brightness", "raise brightness", "higher brightness"
-    ]
-    if any(t in clean for t in bright_up_triggers):
+    # 2. Standalone Brightness phrases
+    if "brighter" in words or "make it brighter" in clean:
         manage_brightness("up")
         return "Brightness increased, sir."
-
-    # Brightness Down triggers
-    bright_down_triggers = [
-        "decrease brightness", "lower brightness", "dim screen", "dim the screen",
-        "brightness down", "turn down brightness", "reduce brightness"
-    ]
-    if any(t in clean for t in bright_down_triggers):
+    if "dim" in words or "dimmed" in words or "darker" in words or "dim screen" in clean or "dim the screen" in clean or "make it darker" in clean:
         manage_brightness("down")
         return "Brightness decreased, sir."
+
+    # 3. Volume Mute / Unmute
+    if "unmute" in words and (has_vol or len(words) <= 3):
+        manage_volume("unmute")
+        return "Volume unmuted, sir."
+    if ("mute" in words or "silence" in words) and (has_vol or len(words) <= 3):
+        manage_volume("mute")
+        return "Volume muted, sir."
+
+    # 4. Explicit Volume commands
+    if has_vol:
+        if is_up or "louder" in words or "turn up" in clean or "turn it up" in clean or "make it louder" in clean:
+            manage_volume("up")
+            return "Volume increased, sir."
+        if is_down or "quieter" in words or "softer" in words or "turn down" in clean or "turn it down" in clean or "make it quieter" in clean:
+            manage_volume("down")
+            return "Volume decreased, sir."
+
+    # 5. Standalone Volume phrases
+    if "louder" in words or "make it louder" in clean or "turn it up" in clean:
+        manage_volume("up")
+        return "Volume increased, sir."
+    if "quieter" in words or "softer" in words or "make it quieter" in clean or "turn it down" in clean:
+        manage_volume("down")
+        return "Volume decreased, sir."
 
     return None
 

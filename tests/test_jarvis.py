@@ -794,21 +794,21 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
 
 class TestJarvisVisualOverlay(unittest.TestCase):
-    """Test compact top title-bar gradient waveform visual overlay state management and animation logic."""
+    """Test top-center header gradient waveform visual overlay state management and animation logic."""
 
     def test_initial_state_idle(self):
         self.assertIn(overlay.JARVIS_STATE, ["idle", "listening", "speaking"])
         self.assertIsNotNone(overlay.root)
         self.assertIsNotNone(overlay.canvas)
-        self.assertEqual(len(overlay.lines), 30)
-        self.assertEqual(len(overlay.bars), 30)
+        self.assertEqual(len(overlay.lines), 40)
+        self.assertEqual(len(overlay.bars), 40)
 
     def test_overlay_geometry(self):
-        self.assertEqual(overlay.w, 240)
-        self.assertEqual(overlay.h, 30)
+        self.assertEqual(overlay.w, 480)
+        self.assertEqual(overlay.h, 60)
         self.assertEqual(overlay.y, 2)
 
-    def test_update_animation_idle_draws_center_line(self):
+    def test_update_animation_idle_draws_breathing_waveform(self):
         overlay.JARVIS_STATE = "idle"
         overlay.update_animation()
         for line in overlay.lines:
@@ -816,7 +816,7 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
             self.assertEqual(x1, x2)
-            self.assertAlmostEqual(y2 - y1, 2.0, places=1)
+            self.assertTrue(y2 > y1)
 
     def test_update_animation_listening_wave_effect(self):
         overlay.JARVIS_STATE = "listening"
@@ -868,30 +868,57 @@ class TestHardwareIntentBypass(unittest.TestCase):
     @patch("main.manage_volume")
     def test_volume_up_bypass(self, mock_vol):
         from main import intercept_hardware_command
-        reply = intercept_hardware_command("could you turn it up please?")
+        reply1 = intercept_hardware_command("increase the volume")
+        self.assertEqual(reply1, "Volume increased, sir.")
+        reply2 = intercept_hardware_command("turn it up")
+        self.assertEqual(reply2, "Volume increased, sir.")
+        self.assertEqual(mock_vol.call_count, 2)
         mock_vol.assert_called_with("up")
-        self.assertEqual(reply, "Volume increased, sir.")
 
     @patch("main.manage_volume")
     def test_volume_down_bypass(self, mock_vol):
         from main import intercept_hardware_command
-        reply = intercept_hardware_command("lower volume")
+        reply1 = intercept_hardware_command("lower the volume")
+        self.assertEqual(reply1, "Volume decreased, sir.")
+        reply2 = intercept_hardware_command("turn down the volume")
+        self.assertEqual(reply2, "Volume decreased, sir.")
+        self.assertEqual(mock_vol.call_count, 2)
         mock_vol.assert_called_with("down")
-        self.assertEqual(reply, "Volume decreased, sir.")
+
+    @patch("main.manage_volume")
+    def test_volume_mute_unmute_bypass(self, mock_vol):
+        from main import intercept_hardware_command
+        reply_mute = intercept_hardware_command("mute the volume")
+        self.assertEqual(reply_mute, "Volume muted, sir.")
+        mock_vol.assert_called_with("mute")
+
+        reply_unmute = intercept_hardware_command("unmute the sound")
+        self.assertEqual(reply_unmute, "Volume unmuted, sir.")
+        mock_vol.assert_called_with("unmute")
 
     @patch("main.manage_brightness")
     def test_brightness_up_bypass(self, mock_bright):
         from main import intercept_hardware_command
-        reply = intercept_hardware_command("increase brightness")
+        reply1 = intercept_hardware_command("increase the brightness")
+        self.assertEqual(reply1, "Brightness increased, sir.")
+        reply2 = intercept_hardware_command("turn up the brightness")
+        self.assertEqual(reply2, "Brightness increased, sir.")
+        reply3 = intercept_hardware_command("make it brighter")
+        self.assertEqual(reply3, "Brightness increased, sir.")
+        self.assertEqual(mock_bright.call_count, 3)
         mock_bright.assert_called_with("up")
-        self.assertEqual(reply, "Brightness increased, sir.")
 
     @patch("main.manage_brightness")
     def test_brightness_down_bypass(self, mock_bright):
         from main import intercept_hardware_command
-        reply = intercept_hardware_command("dim screen")
+        reply1 = intercept_hardware_command("decrease the brightness")
+        self.assertEqual(reply1, "Brightness decreased, sir.")
+        reply2 = intercept_hardware_command("dim the screen")
+        self.assertEqual(reply2, "Brightness decreased, sir.")
+        reply3 = intercept_hardware_command("lower the brightness")
+        self.assertEqual(reply3, "Brightness decreased, sir.")
+        self.assertEqual(mock_bright.call_count, 3)
         mock_bright.assert_called_with("down")
-        self.assertEqual(reply, "Brightness decreased, sir.")
 
     def test_non_hardware_query_returns_none(self):
         from main import intercept_hardware_command
