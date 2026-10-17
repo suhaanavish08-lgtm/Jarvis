@@ -14,6 +14,9 @@ from PIL import Image, ImageGrab
 import psutil
 import pyautogui
 import screen_brightness_control as sbc
+from ctypes import cast, POINTER
+from comtypes import CLSCTX_ALL
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
 pyautogui.FAILSAFE = False
 
@@ -310,20 +313,37 @@ def search_web(query: str, max_results: int = 3) -> str:
 
 
 def manage_volume(action: str) -> str:
-    """Control Windows system audio volume (up, down, mute)."""
+    """Control Windows system audio volume using pycaw (up, down, mute)."""
     act = action.strip().lower()
     try:
+        devices = AudioUtilities.GetSpeakers()
+        if hasattr(devices, "EndpointVolume"):
+            volume = devices.EndpointVolume
+        elif hasattr(devices, "_dev") and hasattr(devices._dev, "Activate"):
+            interface = devices._dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = cast(interface, POINTER(IAudioEndpointVolume))
+        elif hasattr(devices, "Activate"):
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = cast(interface, POINTER(IAudioEndpointVolume))
+        else:
+            volume = cast(devices, POINTER(IAudioEndpointVolume))
+
+        scalar = volume.GetMasterVolumeLevelScalar()
         if act in ["up", "increase"]:
-            pyautogui.press("volumeup", presses=5)
-            return "System volume increased."
+            new_vol = min(1.0, round(scalar + 0.10, 2))
+            volume.SetMasterVolumeLevelScalar(new_vol, None)
+            return f"System volume increased to {int(round(new_vol * 100))}%."
         elif act in ["down", "decrease"]:
-            pyautogui.press("volumedown", presses=5)
-            return "System volume decreased."
+            new_vol = max(0.0, round(scalar - 0.10, 2))
+            volume.SetMasterVolumeLevelScalar(new_vol, None)
+            return f"System volume decreased to {int(round(new_vol * 100))}%."
         elif act == "mute":
-            pyautogui.press("volumemute")
-            return "System audio muted."
+            is_muted = volume.GetMute()
+            new_mute = 0 if is_muted else 1
+            volume.SetMute(new_mute, None)
+            return "System audio unmuted." if new_mute == 0 else "System audio muted."
         elif act == "unmute":
-            pyautogui.press("volumemute")
+            volume.SetMute(0, None)
             return "System audio unmuted."
         else:
             return f"Unknown volume action '{action}'. Valid actions: 'up', 'down', 'mute'."
@@ -336,12 +356,17 @@ def manage_brightness(action: str) -> str:
     """Control display brightness in 10-unit steps (up, down, mute)."""
     act = action.strip().lower()
     try:
+        brightness_val = sbc.get_brightness()
+        current = brightness_val[0] if isinstance(brightness_val, (list, tuple)) else brightness_val
+
         if act in ["up", "increase"]:
-            sbc.set_brightness("+10")
-            return "Screen brightness increased."
+            new_val = min(100, current + 10)
+            sbc.set_brightness(new_val)
+            return f"Screen brightness increased to {new_val}%."
         elif act in ["down", "decrease"]:
-            sbc.set_brightness("-10")
-            return "Screen brightness decreased."
+            new_val = max(0, current - 10)
+            sbc.set_brightness(new_val)
+            return f"Screen brightness decreased to {new_val}%."
         elif act == "mute":
             sbc.set_brightness(0)
             return "Screen brightness muted."

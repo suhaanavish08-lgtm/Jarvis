@@ -300,35 +300,45 @@ class TestOmniTools(unittest.TestCase):
         result = search_web("   ")
         self.assertEqual(result, "Search query cannot be empty.")
 
-    @patch("pyautogui.press")
-    def test_manage_volume(self, mock_press):
-        msg_mute = manage_volume("mute")
-        mock_press.assert_called_with("volumemute")
-        self.assertIn("muted", msg_mute.lower())
-
-        msg_unmute = manage_volume("unmute")
-        mock_press.assert_called_with("volumemute")
-        self.assertIn("unmuted", msg_unmute.lower())
+    @patch("src.tools.system_ctrl.AudioUtilities.GetSpeakers")
+    def test_manage_volume(self, mock_get_speakers):
+        mock_volume = MagicMock()
+        mock_volume.GetMasterVolumeLevelScalar.return_value = 0.50
+        mock_volume.GetMute.return_value = 0
+        mock_device = MagicMock()
+        mock_device.EndpointVolume = mock_volume
+        mock_get_speakers.return_value = mock_device
 
         msg_up = manage_volume("up")
-        mock_press.assert_called_with("volumeup", presses=5)
+        mock_volume.SetMasterVolumeLevelScalar.assert_called_with(0.60, None)
         self.assertIn("increased", msg_up.lower())
 
         msg_down = manage_volume("down")
-        mock_press.assert_called_with("volumedown", presses=5)
+        mock_volume.SetMasterVolumeLevelScalar.assert_called_with(0.40, None)
         self.assertIn("decreased", msg_down.lower())
 
+        msg_mute = manage_volume("mute")
+        mock_volume.SetMute.assert_called_with(1, None)
+        self.assertIn("muted", msg_mute.lower())
+
+        mock_volume.GetMute.return_value = 1
+        msg_unmute = manage_volume("mute")
+        mock_volume.SetMute.assert_called_with(0, None)
+        self.assertIn("unmuted", msg_unmute.lower())
+
     @patch("screen_brightness_control.set_brightness")
-    def test_manage_brightness(self, mock_sbc):
+    @patch("screen_brightness_control.get_brightness")
+    def test_manage_brightness(self, mock_get_brightness, mock_set_brightness):
+        mock_get_brightness.return_value = [50]
         msg_up = manage_brightness("up")
-        mock_sbc.assert_called_with("+10")
+        mock_set_brightness.assert_called_with(60)
         self.assertIn("increased", msg_up.lower())
 
         msg_down = manage_brightness("down")
-        mock_sbc.assert_called_with("-10")
+        mock_set_brightness.assert_called_with(40)
         self.assertIn("decreased", msg_down.lower())
 
-        mock_sbc.side_effect = Exception("Display error")
+        mock_get_brightness.side_effect = Exception("Display error")
         msg_err = manage_brightness("up")
         self.assertIn("unable", msg_err.lower())
 
@@ -464,8 +474,14 @@ class TestLLMToolCalling(unittest.TestCase):
         self.assertTrue(len(reply) > 20)
 
     @patch("ollama.chat")
-    @patch("pyautogui.press")
-    def test_tool_calling_manage_volume(self, mock_press, mock_ollama_chat):
+    @patch("src.tools.system_ctrl.AudioUtilities.GetSpeakers")
+    def test_tool_calling_manage_volume(self, mock_get_speakers, mock_ollama_chat):
+        mock_volume = MagicMock()
+        mock_volume.GetMute.return_value = 0
+        mock_device = MagicMock()
+        mock_device.EndpointVolume = mock_volume
+        mock_get_speakers.return_value = mock_device
+
         mock_ollama_chat.return_value = {
             "message": {
                 "role": "assistant",
@@ -487,7 +503,9 @@ class TestLLMToolCalling(unittest.TestCase):
 
     @patch("ollama.chat")
     @patch("screen_brightness_control.set_brightness")
-    def test_tool_calling_manage_brightness(self, mock_sbc, mock_ollama_chat):
+    @patch("screen_brightness_control.get_brightness")
+    def test_tool_calling_manage_brightness(self, mock_get_brightness, mock_sbc, mock_ollama_chat):
+        mock_get_brightness.return_value = [50]
         mock_ollama_chat.return_value = {
             "message": {
                 "role": "assistant",
@@ -504,7 +522,7 @@ class TestLLMToolCalling(unittest.TestCase):
         }
 
         reply = self.assistant.query_ollama("Increase brightness")
-        mock_sbc.assert_called_with("+10")
+        mock_sbc.assert_called_with(60)
         self.assertIn("Certainly, sir", reply)
         self.assertIn("increased", reply.lower())
 
@@ -720,6 +738,31 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assertEqual(self.assistant.conversation_history[3]["content"], "You asked for my identity, sir.")
 
 
+    @patch("main.Model")
+    @patch("sounddevice.InputStream")
+    @patch.object(VoiceAssistant, "speak")
+    @patch.object(VoiceAssistant, "listen")
+    @patch("ollama.chat")
+    def test_run_jarvis_follow_up_listening_on_question(self, mock_ollama_chat, mock_listen, mock_speak, mock_stream, mock_model_cls):
+        mock_model_instance = MagicMock()
+        mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
+        mock_model_cls.return_value = mock_model_instance
+
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.read.return_value = (np.zeros(1280, dtype=np.int16), False)
+        mock_stream.return_value.__enter__.return_value = mock_stream_instance
+
+        # First query ends in '?', triggering follow-up without wake word
+        mock_listen.side_effect = ["Need info", "goodbye"]
+        mock_ollama_chat.return_value = [
+            {"message": {"content": "What details would you like to know?"}}
+        ]
+
+        run_jarvis(self.assistant)
+        self.assertEqual(mock_listen.call_count, 2)
+        mock_speak.assert_any_call("What details would you like to know?")
+
+
 class TestJarvisVisualOverlay(unittest.TestCase):
     """Test top-center visual overlay state management and animation logic."""
 
@@ -728,6 +771,11 @@ class TestJarvisVisualOverlay(unittest.TestCase):
         self.assertIsNotNone(overlay.root)
         self.assertIsNotNone(overlay.canvas)
         self.assertIsNotNone(overlay.orb)
+        self.assertEqual(len(overlay.ovals), 3)
+
+    def test_overlay_geometry(self):
+        self.assertEqual(overlay.w, 150)
+        self.assertEqual(overlay.y, 10)
 
     def test_update_animation_idle_shrinks_orb(self):
         overlay.JARVIS_STATE = "idle"

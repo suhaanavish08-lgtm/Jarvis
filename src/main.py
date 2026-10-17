@@ -487,81 +487,107 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
 
     chunk_size = 1280  # 80ms audio chunk at 16kHz for openwakeword
     sample_rate = 16000
+    skip_wake_word = False
 
     try:
         with sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16") as stream:
             while True:
-                try:
-                    audio_chunk, _ = stream.read(chunk_size)
-                except (sd.PortAudioError, OSError) as mic_err:
-                    print(f"[Microphone Error]: {mic_err}")
-                    time.sleep(1.0)
-                    continue
+                user_text = None
 
-                if audio_chunk is None or len(audio_chunk) == 0:
-                    continue
-
-                prediction = oww_model.predict(audio_chunk.flatten())
-                score = prediction.get("hey_jarvis", 0.0)
-
-                if score >= 0.5:
-                    print(f"\n[Wake Word]: 'Hey Jarvis' detected! (confidence: {score:.2f})")
-                    oww_model.reset()
-                    try:
-                        stream.stop()
-                    except Exception:
-                        pass
-
-                    # Immediately call speak("Yes, sir.")
-                    assistant.speak("Yes, sir.")
-
-                    # Immediately trigger Whisper transcription to listen for user command
+                if skip_wake_word:
+                    print("\n[Follow-up listening...]\n")
+                    skip_wake_word = False
                     user_text = assistant.listen()
-                    if user_text and user_text.strip():
-                        print(f"[User]: {user_text}")
-                        clean_text = user_text.strip()
-                        if clean_text.lower() in ["exit", "quit", "shutdown", "stop", "goodbye"]:
-                            assistant.speak("Shutting down. Have a wonderful day, sir.")
-                            break
+                else:
+                    try:
+                        audio_chunk, _ = stream.read(chunk_size)
+                    except (sd.PortAudioError, OSError) as mic_err:
+                        print(f"[Microphone Error]: {mic_err}")
+                        time.sleep(1.0)
+                        continue
 
-                        handled, system_reply = handle_system_command(clean_text)
-                        if handled:
-                            assistant.speak(system_reply)
-                        else:
-                            messages.append({"role": "user", "content": clean_text})
-                            try:
-                                response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
-                                current_sentence = ""
-                                full_reply = ""
-                                for chunk in response:
-                                    try:
-                                        content = chunk["message"]["content"]
-                                    except Exception:
-                                        content = getattr(getattr(chunk, "message", None), "content", "")
-                                    if not content:
-                                        continue
-                                    current_sentence += content
-                                    full_reply += content
+                    if audio_chunk is None or len(audio_chunk) == 0:
+                        continue
 
-                                    while True:
-                                        match = re.search(r"([.?!])\s+", current_sentence)
-                                        if not match:
-                                            break
-                                        end_pos = match.end()
-                                        sentence = current_sentence[:end_pos].strip()
-                                        current_sentence = current_sentence[end_pos:]
-                                        if sentence:
-                                            assistant.speak(sentence)
+                    # Mic Boost: multiply chunk by 2.5, clip to np.int16
+                    boosted_chunk = np.clip(audio_chunk.astype(np.float32) * 2.5, -32768, 32767).astype(np.int16)
+                    prediction = oww_model.predict(boosted_chunk.flatten())
+                    score = prediction.get("hey_jarvis", 0.0)
 
-                                if current_sentence.strip():
-                                    assistant.speak(current_sentence.strip())
+                    # Trigger threshold lowered to 0.3
+                    if score >= 0.3:
+                        print(f"\n[Wake Word]: 'Hey Jarvis' detected! (confidence: {score:.2f})")
+                        oww_model.reset()
+                        try:
+                            stream.stop()
+                        except Exception:
+                            pass
 
-                                if full_reply.strip():
-                                    messages.append({"role": "assistant", "content": full_reply.strip()})
-                            except Exception as exc:
-                                print(f"[Ollama Error]: {exc}")
-                                assistant.speak("I encountered an error, sir.")
+                        # Immediately call speak("Yes, sir.")
+                        assistant.speak("Yes, sir.")
 
+                        # Immediately trigger Whisper transcription to listen for user command
+                        user_text = assistant.listen()
+                    else:
+                        time.sleep(0.01)
+                        continue
+
+                jarvis_response = ""
+                if user_text and user_text.strip():
+                    print(f"[User]: {user_text}")
+                    clean_text = user_text.strip()
+                    if clean_text.lower() in ["exit", "quit", "shutdown", "stop", "goodbye"]:
+                        assistant.speak("Shutting down. Have a wonderful day, sir.")
+                        break
+
+                    handled, system_reply = handle_system_command(clean_text)
+                    if handled:
+                        assistant.speak(system_reply)
+                        jarvis_response = system_reply
+                    else:
+                        messages.append({"role": "user", "content": clean_text})
+                        try:
+                            response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
+                            current_sentence = ""
+                            full_reply = ""
+                            for chunk in response:
+                                try:
+                                    content = chunk["message"]["content"]
+                                except Exception:
+                                    content = getattr(getattr(chunk, "message", None), "content", "")
+                                if not content:
+                                    continue
+                                current_sentence += content
+                                full_reply += content
+
+                                while True:
+                                    match = re.search(r"([.?!])\s+", current_sentence)
+                                    if not match:
+                                        break
+                                    end_pos = match.end()
+                                    sentence = current_sentence[:end_pos].strip()
+                                    current_sentence = current_sentence[end_pos:]
+                                    if sentence:
+                                        assistant.speak(sentence)
+
+                            if current_sentence.strip():
+                                assistant.speak(current_sentence.strip())
+
+                            if full_reply.strip():
+                                messages.append({"role": "assistant", "content": full_reply.strip()})
+                            jarvis_response = full_reply.strip()
+                        except Exception as exc:
+                            print(f"[Ollama Error]: {exc}")
+                            err_msg = "I encountered an error, sir."
+                            assistant.speak(err_msg)
+                            jarvis_response = err_msg
+
+                # Follow-up check: If Jarvis's response contains "error", "repeat", or ends with "?", set skip_wake_word = True
+                resp_lower = jarvis_response.lower()
+                if jarvis_response and ("error" in resp_lower or "repeat" in resp_lower or jarvis_response.rstrip().endswith("?")):
+                    skip_wake_word = True
+                else:
+                    skip_wake_word = False
                     oww_model.reset()
                     try:
                         stream.start()

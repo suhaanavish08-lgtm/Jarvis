@@ -13,3 +13,5 @@ openwakeword
 duckduckgo-search
 pillow
 screen-brightness-control
+pycaw
+comtypes
