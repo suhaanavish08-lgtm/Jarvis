@@ -202,6 +202,7 @@ def synthesize_speech(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1) 
 
 _playback_end_time = 0.0
 IS_SPEAKING = False
+_last_tts_time = 0.0
 
 
 def is_audio_playing() -> bool:
@@ -222,7 +223,7 @@ def is_audio_playing() -> bool:
 
 def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
     """Generate and play audio using Kokoro TTS and sounddevice, strictly waiting for hardware completion."""
-    global _playback_end_time, IS_SPEAKING
+    global _playback_end_time, IS_SPEAKING, _last_tts_time
     print(f"\n[Jarvis]: {text}\n")
     if not text or not text.strip():
         return
@@ -236,15 +237,16 @@ def speak(text: str, voice: str = CHOSEN_VOICE, speed: float = 1.1):
             try:
                 sd.play(combined, sample_rate)
                 sd.wait()
-                time.sleep(0.1)  # Safety margin: ensure final packet clears DAC before unmuting mic
+                time.sleep(0.1)  # Clear soundcard DAC
             finally:
                 overlay.JARVIS_STATE = "idle"
-                time.sleep(0.4)  # Wait 0.4s to prevent acoustic echo / interruptions
                 IS_SPEAKING = False
+                _last_tts_time = time.time()
     except Exception as e:
         print(f"[Kokoro TTS Error]: {e}")
         overlay.JARVIS_STATE = "idle"
         IS_SPEAKING = False
+        _last_tts_time = time.time()
 
 
 def listen(
@@ -257,7 +259,7 @@ def listen(
     **kwargs,
 ) -> Optional[str]:
     """Record microphone audio via sounddevice, detect speech, stop after 0.7s silence, and transcribe via Whisper."""
-    global _playback_end_time, IS_SPEAKING
+    global _playback_end_time, IS_SPEAKING, _last_tts_time
     start_time = time.time()
     effective_timeout = timeout if timeout is not None else max_silent_time
 
@@ -266,6 +268,11 @@ def listen(
         if effective_timeout is not None and (time.time() - start_time) >= effective_timeout:
             return None
         time.sleep(0.02)
+
+    # Flush delay after TTS finishes before listening again to prevent self-interruption
+    since_tts = time.time() - _last_tts_time
+    if since_tts < 0.4:
+        time.sleep(0.4 - since_tts)
 
     print("[Listening for speech...]")
     overlay.JARVIS_STATE = "listening"
@@ -289,13 +296,16 @@ def listen(
                 if effective_timeout is not None and (time.time() - start_time) >= effective_timeout:
                     return None
 
-                # Completely pause or stop microphone input stream while IS_SPEAKING is True
+                # Completely drop all incoming audio frames if IS_SPEAKING is True
                 if IS_SPEAKING:
                     try:
                         if stream.active:
                             stream.stop()
                     except Exception:
                         pass
+                    audio_chunks.clear()
+                    is_recording = False
+                    silence_samples = 0
                     time.sleep(0.02)
                     continue
                 else:
@@ -307,7 +317,43 @@ def listen(
                     except Exception:
                         pass
 
-                chunk, _ = stream.read(chunk_size)
+                try:
+                    chunk, _ = stream.read(chunk_size, exception_on_overflow=False)
+                except TypeError:
+                    chunk, _ = stream.read(chunk_size)
+
+                # Completely drop audio frames if speaking is active
+                if IS_SPEAKING:
+                    continue
+
+                vol = np.max(np.abs(chunk))
+
+                if not is_recording:
+                    if vol > threshold:
+                        is_recording = True
+                        audio_chunks.append(chunk)
+                        silence_samples = 0
+                        if is_audio_playing():
+                            print("[Interruption detected! Stopping speech playback...]")
+                            try:
+                                sd.stop()
+                            except Exception:
+                                pass
+                            _playback_end_time = 0.0
+                    else:
+                        initial_silence_samples += len(chunk)
+                        if max_initial_samples is not None and initial_silence_samples >= max_initial_samples:
+                            return None
+                else:
+                    audio_chunks.append(chunk)
+                    if vol < threshold:
+                        silence_samples += len(chunk)
+                        if silence_samples >= silence_limit_samples:
+                            break
+                    else:
+                        silence_samples = 0
+
+                time.sleep(0.01)
 
                 vol = np.max(np.abs(chunk))
 
@@ -591,6 +637,27 @@ class VoiceAssistant:
             self.speak("Shutting down. Have a wonderful day, sir.")
             return False
 
+        # Instant Hardware Interceptors
+        if "increase volume" in lower_text or "volume up" in lower_text:
+            manage_volume("up")
+            self.speak("Volume increased.")
+            return True
+
+        if "decrease volume" in lower_text or "volume down" in lower_text:
+            manage_volume("down")
+            self.speak("Volume decreased.")
+            return True
+
+        if "increase brightness" in lower_text or "brightness up" in lower_text:
+            manage_brightness("up")
+            self.speak("Brightness increased.")
+            return True
+
+        if "decrease brightness" in lower_text or "dim screen" in lower_text:
+            manage_brightness("down")
+            self.speak("Brightness decreased.")
+            return True
+
         # Instant local hardware intent bypass
         hw_reply = intercept_hardware_command(clean_text)
         if hw_reply:
@@ -694,19 +761,30 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                             pass
 
                     try:
-                        audio_chunk, _ = stream.read(chunk_size)
+                        try:
+                            audio_chunk, _ = stream.read(chunk_size, exception_on_overflow=False)
+                        except TypeError:
+                            audio_chunk, _ = stream.read(chunk_size)
                     except (sd.PortAudioError, OSError) as mic_err:
                         print(f"[Microphone Error]: {mic_err}")
                         time.sleep(1.0)
                         continue
 
+                    # In listening loops, completely drop all incoming audio frames if IS_SPEAKING is True
+                    if IS_SPEAKING:
+                        continue
+
                     if audio_chunk is None or len(audio_chunk) == 0:
+                        time.sleep(0.01)
                         continue
 
                     # Mic Boost: multiply chunk by 2.5, clip to np.int16
                     boosted_chunk = np.clip(audio_chunk.astype(np.float32) * 2.5, -32768, 32767).astype(np.int16)
                     prediction = oww_model.predict(boosted_chunk.flatten())
                     score = prediction.get("hey_jarvis", 0.0)
+
+                    # Sleep 0.01s after predictions to prevent core pegging
+                    time.sleep(0.01)
 
                     # Trigger threshold lowered to 0.3
                     if score >= 0.3:
@@ -720,10 +798,12 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                         # Immediately call speak("Yes, sir.")
                         assistant.speak("Yes, sir.")
 
+                        # Flush delay after TTS finishes before listening again to prevent self-interruption
+                        time.sleep(0.4)
+
                         # Immediately trigger Whisper transcription to listen for user command
                         user_text = assistant.listen()
                     else:
-                        time.sleep(0.01)
                         continue
 
                 jarvis_response = ""
@@ -746,6 +826,60 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                             stream.start()
                         except Exception:
                             pass
+                        time.sleep(0.4)
+                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+                        continue
+
+                    # Instant Native Hardware Interceptors: execute natively and skip Ollama
+                    if "increase volume" in lower_text or "volume up" in lower_text:
+                        manage_volume("up")
+                        assistant.speak("Volume increased.")
+                        skip_wake_word = False
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        time.sleep(0.4)
+                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+                        continue
+
+                    if "decrease volume" in lower_text or "volume down" in lower_text:
+                        manage_volume("down")
+                        assistant.speak("Volume decreased.")
+                        skip_wake_word = False
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        time.sleep(0.4)
+                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+                        continue
+
+                    if "increase brightness" in lower_text or "brightness up" in lower_text:
+                        manage_brightness("up")
+                        assistant.speak("Brightness increased.")
+                        skip_wake_word = False
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        time.sleep(0.4)
+                        print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
+                        continue
+
+                    if "decrease brightness" in lower_text or "dim screen" in lower_text:
+                        manage_brightness("down")
+                        assistant.speak("Brightness decreased.")
+                        skip_wake_word = False
+                        oww_model.reset()
+                        try:
+                            stream.start()
+                        except Exception:
+                            pass
+                        time.sleep(0.4)
                         print("\n[Jarvis]: Resumed listening for 'Hey Jarvis'...\n")
                         continue
 

@@ -20,6 +20,12 @@ from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 import warnings
 
+# Force COM initialization for pycaw
+try:
+    comtypes.CoInitialize()
+except Exception:
+    pass
+
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 pyautogui.FAILSAFE = False
 

@@ -880,21 +880,23 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
 
 class TestJarvisVisualOverlay(unittest.TestCase):
-    """Test top-center header gradient waveform visual overlay state management and animation logic."""
+    """Test compact title-bar visual overlay state management and animation logic."""
 
     def test_initial_state_idle(self):
         self.assertIn(overlay.JARVIS_STATE, ["idle", "listening", "speaking"])
         self.assertIsNotNone(overlay.root)
         self.assertIsNotNone(overlay.canvas)
-        self.assertEqual(len(overlay.lines), 40)
-        self.assertEqual(len(overlay.bars), 40)
+        self.assertEqual(len(overlay.lines), 30)
+        self.assertEqual(len(overlay.bars), 30)
 
     def test_overlay_geometry(self):
-        self.assertEqual(overlay.w, 480)
-        self.assertEqual(overlay.h, 60)
+        self.assertEqual(overlay.w, 240)
+        self.assertEqual(overlay.h, 30)
         self.assertEqual(overlay.y, 2)
+        screen_w = overlay.root.winfo_screenwidth()
+        self.assertEqual(overlay.x, int((screen_w - 240) / 2))
 
-    def test_update_animation_idle_draws_breathing_waveform(self):
+    def test_update_animation_idle_static_center_line(self):
         overlay.JARVIS_STATE = "idle"
         overlay.update_animation()
         for line in overlay.lines:
@@ -902,7 +904,7 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             self.assertEqual(len(coords), 4)
             x1, y1, x2, y2 = coords
             self.assertEqual(x1, x2)
-            self.assertTrue(y2 > y1)
+            self.assertAlmostEqual(y2 - y1, 2.0, delta=0.01)
 
     def test_update_animation_listening_wave_effect(self):
         overlay.JARVIS_STATE = "listening"
@@ -913,6 +915,7 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             x1, y1, x2, y2 = coords
             self.assertEqual(x1, x2)
             self.assertTrue(y2 > y1)
+            self.assertTrue((y2 - y1) <= 8.01)
 
     def test_update_animation_speaking_modulates_lines(self):
         overlay.JARVIS_STATE = "speaking"
@@ -923,6 +926,25 @@ class TestJarvisVisualOverlay(unittest.TestCase):
             x1, y1, x2, y2 = coords
             self.assertEqual(x1, x2)
             self.assertTrue(y2 > y1)
+            self.assertTrue((y2 - y1) <= 20.01)
+
+    @patch.object(overlay.root, "after")
+    def test_tkinter_loop_throttling_idle_and_active(self, mock_after):
+        overlay.JARVIS_STATE = "idle"
+        overlay._visualizer.update_animation()
+        mock_after.assert_called_with(200, overlay._visualizer.update_animation)
+
+        mock_after.reset_mock()
+        overlay.JARVIS_STATE = "listening"
+        overlay._visualizer.update_animation()
+        mock_after.assert_called_with(16, overlay._visualizer.update_animation)
+
+        mock_after.reset_mock()
+        overlay.JARVIS_STATE = "speaking"
+        overlay._visualizer.update_animation()
+        mock_after.assert_called_with(16, overlay._visualizer.update_animation)
+
+        overlay.JARVIS_STATE = "idle"
 
     def test_listen_sets_and_resets_overlay_state(self):
         assistant = VoiceAssistant()
@@ -1040,6 +1062,84 @@ class TestHardwareIntentBypass(unittest.TestCase):
         reply3 = intercept_hardware_command("lower volume by 20%")
         self.assertEqual(reply3, "Volume decreased by 20%, sir.")
         mock_vol.assert_called_with("down", value=20)
+
+    @patch("main.manage_volume")
+    @patch.object(VoiceAssistant, "speak")
+    def test_native_hardware_interceptors_volume(self, mock_speak, mock_vol):
+        assistant = VoiceAssistant()
+        assistant.process_input("increase volume")
+        mock_vol.assert_called_with("up")
+        mock_speak.assert_called_with("Volume increased.")
+
+        mock_vol.reset_mock()
+        mock_speak.reset_mock()
+        assistant.process_input("volume up")
+        mock_vol.assert_called_with("up")
+        mock_speak.assert_called_with("Volume increased.")
+
+        mock_vol.reset_mock()
+        mock_speak.reset_mock()
+        assistant.process_input("decrease volume")
+        mock_vol.assert_called_with("down")
+        mock_speak.assert_called_with("Volume decreased.")
+
+        mock_vol.reset_mock()
+        mock_speak.reset_mock()
+        assistant.process_input("volume down")
+        mock_vol.assert_called_with("down")
+        mock_speak.assert_called_with("Volume decreased.")
+
+    @patch("main.manage_brightness")
+    @patch.object(VoiceAssistant, "speak")
+    def test_native_hardware_interceptors_brightness(self, mock_speak, mock_bright):
+        assistant = VoiceAssistant()
+        assistant.process_input("increase brightness")
+        mock_bright.assert_called_with("up")
+        mock_speak.assert_called_with("Brightness increased.")
+
+        mock_bright.reset_mock()
+        mock_speak.reset_mock()
+        assistant.process_input("brightness up")
+        mock_bright.assert_called_with("up")
+        mock_speak.assert_called_with("Brightness increased.")
+
+        mock_bright.reset_mock()
+        mock_speak.reset_mock()
+        assistant.process_input("decrease brightness")
+        mock_bright.assert_called_with("down")
+        mock_speak.assert_called_with("Brightness decreased.")
+
+        mock_bright.reset_mock()
+        mock_speak.reset_mock()
+        assistant.process_input("dim screen")
+        mock_bright.assert_called_with("down")
+        mock_speak.assert_called_with("Brightness decreased.")
+
+    @patch("main.manage_volume")
+    @patch("main.Model")
+    @patch("sounddevice.InputStream")
+    @patch.object(VoiceAssistant, "speak")
+    @patch.object(VoiceAssistant, "listen")
+    @patch("ollama.chat")
+    def test_run_jarvis_native_hardware_interceptor_skips_ollama(self, mock_ollama_chat, mock_listen, mock_speak, mock_stream, mock_model_cls, mock_vol):
+        assistant = VoiceAssistant()
+        mock_model_instance = MagicMock()
+        mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
+        mock_model_cls.return_value = mock_model_instance
+
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.read.return_value = (np.zeros(1280, dtype=np.int16), False)
+        mock_stream.return_value.__enter__.return_value = mock_stream_instance
+
+        # 1st: "increase volume" -> intercepts natively and continues
+        # 2nd: "goodbye" -> exits
+        mock_listen.side_effect = ["increase volume", "goodbye"]
+
+        run_jarvis(assistant)
+
+        mock_vol.assert_called_with("up")
+        mock_speak.assert_any_call("Volume increased.")
+        mock_ollama_chat.assert_not_called()
 
 
 if __name__ == "__main__":
