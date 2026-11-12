@@ -20,6 +20,16 @@ from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 import warnings
 
+try:
+    from openjarvis.tools import BaseTool, ToolSpec
+    from openjarvis.core.types import ToolResult
+    from openjarvis.skills.types import SkillManifest
+except ImportError:
+    BaseTool = object
+    ToolSpec = dict
+    ToolResult = dict
+    SkillManifest = dict
+
 # Force COM initialization for pycaw
 try:
     comtypes.CoInitialize()
@@ -849,6 +859,308 @@ AVAILABLE_TOOLS: Dict[str, Any] = {
     "capture_screen": capture_screen,
     "list_running_processes": list_running_processes,
 }
+
+
+# OpenJarvis Skill Manifests following the agentskills.io schema
+VOLUME_SKILL_MANIFEST = SkillManifest(
+    name="manage-volume",
+    version="0.1.0",
+    description="Control Windows system audio volume. Can increase, decrease, mute, unmute, or set volume to a specific percentage.",
+    author="jarvis",
+    metadata={
+        "license": "MIT",
+        "compatibility": "Windows",
+        "allowed-tools": ["manage_volume"],
+        "openjarvis": {
+            "platforms": ["windows"],
+            "version": "0.1.0",
+        },
+    },
+)
+
+BRIGHTNESS_SKILL_MANIFEST = SkillManifest(
+    name="manage-brightness",
+    version="0.1.0",
+    description="Control screen brightness on Windows displays. Can increase, decrease, or set brightness to a specific percentage.",
+    author="jarvis",
+    metadata={
+        "license": "MIT",
+        "compatibility": "Windows",
+        "allowed-tools": ["manage_brightness"],
+        "openjarvis": {
+            "platforms": ["windows"],
+            "version": "0.1.0",
+        },
+    },
+)
+
+
+class VolumeSkill(BaseTool):
+    """OpenJarvis hardware skill for volume control conforming to agentskills.io schema."""
+
+    manifest = VOLUME_SKILL_MANIFEST
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="manage_volume",
+            description=self.manifest.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["up", "down", "mute", "unmute", "set"],
+                        "description": "Audio action to perform: 'up', 'down', 'mute', 'unmute', or 'set'.",
+                    },
+                    "value": {
+                        "type": "integer",
+                        "description": "Optional percentage value between 0 and 100 when setting or stepping volume.",
+                    },
+                },
+                "required": ["action"],
+            },
+            category="hardware",
+            metadata={
+                "schema": "agentskills.io",
+                "skill_name": self.manifest.name,
+                "compatibility": "Windows",
+            },
+        )
+
+    def execute(self, action: str = "up", value: Optional[int] = None, **kwargs: Any) -> ToolResult:
+        msg = manage_volume(action=action, value=value)
+        return ToolResult(tool_name="manage_volume", content=msg, success=True)
+
+
+class BrightnessSkill(BaseTool):
+    """OpenJarvis hardware skill for brightness control conforming to agentskills.io schema."""
+
+    manifest = BRIGHTNESS_SKILL_MANIFEST
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="manage_brightness",
+            description=self.manifest.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["up", "down", "set"],
+                        "description": "Brightness action to perform: 'up', 'down', or 'set'.",
+                    },
+                    "value": {
+                        "type": "integer",
+                        "description": "Optional percentage value between 0 and 100 when setting or stepping brightness.",
+                    },
+                },
+                "required": ["action"],
+            },
+            category="hardware",
+            metadata={
+                "schema": "agentskills.io",
+                "skill_name": self.manifest.name,
+                "compatibility": "Windows",
+            },
+        )
+
+    def execute(self, action: str = "up", value: Optional[int] = None, **kwargs: Any) -> ToolResult:
+        msg = manage_brightness(action=action, value=value)
+        return ToolResult(tool_name="manage_brightness", content=msg, success=True)
+
+
+class SpotifySkill(BaseTool):
+    """OpenJarvis tool for Spotify control."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="control_spotify",
+            description="Control Spotify music playback or search for songs/artists.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["playpause", "next", "previous", "shuffle", "search"],
+                        "description": "Action to perform: 'playpause', 'next', 'previous', 'shuffle', or 'search'.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search term for songs, artists, or albums when action is 'search'.",
+                    },
+                },
+                "required": ["action"],
+            },
+            category="media",
+        )
+
+    def execute(self, action: str = "playpause", query: str = "", **kwargs: Any) -> ToolResult:
+        _, msg = control_spotify(action=action, query=query)
+        return ToolResult(tool_name="control_spotify", content=msg, success=True)
+
+
+class SystemStatsSkill(BaseTool):
+    """OpenJarvis tool for system diagnostics."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="get_system_stats",
+            description="Retrieve computer hardware stats including CPU, memory, disk, and battery.",
+            parameters={"type": "object", "properties": {}},
+            category="system",
+        )
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        stats = get_system_stats()
+        return ToolResult(tool_name="get_system_stats", content=stats["summary"], success=True)
+
+
+class AppLaunchSkill(BaseTool):
+    """OpenJarvis tool for launching desktop applications."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="open_application",
+            description="Launch desktop applications such as Notepad, Calculator, Spotify, Task Manager, or Antigravity.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "app_name": {
+                        "type": "string",
+                        "description": "The name of the application to open.",
+                    }
+                },
+                "required": ["app_name"],
+            },
+            category="system",
+        )
+
+    def execute(self, app_name: str = "", **kwargs: Any) -> ToolResult:
+        _, msg = open_application(app_name=app_name)
+        return ToolResult(tool_name="open_application", content=msg, success=True)
+
+
+class PowerShellSkill(BaseTool):
+    """OpenJarvis tool for safe PowerShell commands."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="run_powershell_command",
+            description="Execute a safe PowerShell terminal command on the local Windows system and return stdout/stderr.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The PowerShell command line to execute.",
+                    }
+                },
+                "required": ["command"],
+            },
+            category="system",
+        )
+
+    def execute(self, command: str = "", **kwargs: Any) -> ToolResult:
+        output = run_powershell_command(command=command)
+        return ToolResult(tool_name="run_powershell_command", content=output, success=True)
+
+
+class WebSearchSkill(BaseTool):
+    """OpenJarvis tool for web search."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="search_web",
+            description="Perform an instant web search using DuckDuckGo to find information, current events, or answers.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query term or question.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of search result snippets to retrieve (default: 3).",
+                    },
+                },
+                "required": ["query"],
+            },
+            category="web",
+        )
+
+    def execute(self, query: str = "", max_results: int = 3, **kwargs: Any) -> ToolResult:
+        output = search_web(query=query, max_results=int(max_results))
+        return ToolResult(tool_name="search_web", content=output, success=True)
+
+
+class ScreenCaptureSkill(BaseTool):
+    """OpenJarvis tool for capturing screenshots."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="capture_screen",
+            description="Take a screenshot of the active monitor display and return its dimensions and status.",
+            parameters={"type": "object", "properties": {}},
+            category="system",
+        )
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        output = capture_screen()
+        return ToolResult(tool_name="capture_screen", content=output, success=True)
+
+
+class ProcessListSkill(BaseTool):
+    """OpenJarvis tool for listing active processes."""
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="list_running_processes",
+            description="List top running Windows processes sorted by CPU and memory usage.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of processes to return (default: 10).",
+                    }
+                },
+            },
+            category="system",
+        )
+
+    def execute(self, limit: int = 10, **kwargs: Any) -> ToolResult:
+        output = list_running_processes(limit=int(limit))
+        return ToolResult(tool_name="list_running_processes", content=output, success=True)
+
+
+def get_hardware_skills() -> List[BaseTool]:
+    """Return OpenJarvis hardware skills adhering to agentskills.io schema."""
+    return [VolumeSkill(), BrightnessSkill()]
+
+
+def get_openjarvis_tools() -> List[BaseTool]:
+    """Return all OpenJarvis skills and tools for registration with OrchestratorAgent."""
+    return [
+        VolumeSkill(),
+        BrightnessSkill(),
+        SpotifySkill(),
+        SystemStatsSkill(),
+        AppLaunchSkill(),
+        PowerShellSkill(),
+        WebSearchSkill(),
+        ScreenCaptureSkill(),
+        ProcessListSkill(),
+    ]
 
 
 def handle_system_command(text: str) -> Tuple[bool, str]:

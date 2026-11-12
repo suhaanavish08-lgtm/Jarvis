@@ -2,6 +2,7 @@
 
 import os
 import sys
+import json
 import unittest
 from unittest.mock import MagicMock, patch, call, PropertyMock
 import subprocess
@@ -28,7 +29,15 @@ from tools.system_ctrl import (
     handle_system_command,
     TOOL_SCHEMAS,
     AVAILABLE_TOOLS,
+    VolumeSkill,
+    BrightnessSkill,
+    VOLUME_SKILL_MANIFEST,
+    BRIGHTNESS_SKILL_MANIFEST,
+    get_hardware_skills,
+    get_openjarvis_tools,
 )
+from openjarvis.agents.orchestrator import AgentResult
+from openjarvis.core.types import ToolCall, ToolResult
 import main
 import overlay
 from main import (
@@ -41,6 +50,8 @@ from main import (
     MODELS_DIR,
     KOKORO_MODEL_FILE,
     KOKORO_VOICES_FILE,
+    create_orchestrator,
+    JarvisOrchestrator,
 )
 
 
@@ -430,27 +441,28 @@ class TestOmniTools(unittest.TestCase):
 
 
 class TestLLMToolCalling(unittest.TestCase):
-    """Test LLM tool-calling simulation with Ollama: argument parsing, execution, and history recording."""
+    """Test tool calling with OpenJarvis Orchestrator: argument parsing, execution, and history recording."""
 
     def setUp(self):
         self.assistant = VoiceAssistant(model_name="jarvis", voice="bm_daniel")
 
-    @patch("ollama.chat")
-    def test_tool_calling_system_stats(self, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_system_stats(self):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "get_system_stats",
-                            "arguments": {}
-                        }
+                        "id": "c1",
+                        "name": "get_system_stats",
+                        "arguments": "{}"
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. CPU is running at 15.0%.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Check system health")
         self.assertIn("Certainly, sir", reply)
@@ -459,140 +471,146 @@ class TestLLMToolCalling(unittest.TestCase):
         self.assertEqual(last_history["role"], "assistant")
         self.assertIn("CPU is running at", last_history["content"])
 
-    @patch("ollama.chat")
     @patch("tools.system_ctrl.is_spotify_running", return_value=True)
     @patch("pyautogui.press")
-    def test_tool_calling_spotify_json_string_arguments(self, mock_press, mock_running, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_spotify_json_string_arguments(self, mock_press, mock_running):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "control_spotify",
-                            "arguments": '{"action": "previous"}'
-                        }
+                        "id": "c2",
+                        "name": "control_spotify",
+                        "arguments": '{"action": "previous"}'
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Skipped to previous track on Spotify.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Play previous song")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("Skipped to previous track on Spotify", reply)
         mock_press.assert_called_with("prevtrack")
 
-    @patch("ollama.chat")
     @patch("subprocess.Popen")
-    def test_tool_calling_open_application(self, mock_popen, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_open_application(self, mock_popen):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "open_application",
-                            "arguments": {"app_name": "task manager"}
-                        }
+                        "id": "c3",
+                        "name": "open_application",
+                        "arguments": json.dumps({"app_name": "task manager"})
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Task manager opened.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Open task manager")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("Task manager opened", reply)
         mock_popen.assert_called_with("taskmgr.exe", shell=True)
 
-    @patch("ollama.chat")
-    def test_tool_calling_powershell(self, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_powershell(self):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "run_powershell_command",
-                            "arguments": {"command": "Write-Output 'Diagnostic Test'"}
-                        }
+                        "id": "c4",
+                        "name": "run_powershell_command",
+                        "arguments": json.dumps({"command": "Write-Output 'Diagnostic Test'"})
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Diagnostic Test",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Run a quick diagnostic test in PowerShell")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("Diagnostic Test", reply)
 
-    @patch("ollama.chat")
-    def test_tool_calling_search_web(self, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_search_web(self):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "search_web",
-                            "arguments": {"query": "Latest AI news", "max_results": 2}
-                        }
+                        "id": "c5",
+                        "name": "search_web",
+                        "arguments": json.dumps({"query": "Latest AI news", "max_results": 2})
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Here is the latest AI news overview.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Search the web for latest AI news")
         self.assertIn("Certainly, sir", reply)
         self.assertTrue(len(reply) > 20)
 
-    @patch("ollama.chat")
     @patch("src.tools.system_ctrl.AudioUtilities.GetSpeakers")
-    def test_tool_calling_manage_volume(self, mock_get_speakers, mock_ollama_chat):
+    def test_tool_calling_manage_volume(self, mock_get_speakers):
         mock_volume = MagicMock()
         mock_volume.GetMute.return_value = 0
         mock_device = MagicMock()
         mock_device.EndpointVolume = mock_volume
         mock_get_speakers.return_value = mock_device
 
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "manage_volume",
-                            "arguments": {"action": "mute"}
-                        }
+                        "id": "c6",
+                        "name": "manage_volume",
+                        "arguments": json.dumps({"action": "mute"})
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Audio has been muted.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Mute the sound")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("muted", reply.lower())
 
-    @patch("ollama.chat")
     @patch("screen_brightness_control.set_brightness")
-    def test_tool_calling_manage_brightness(self, mock_sbc, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_manage_brightness(self, mock_sbc):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "manage_brightness",
-                            "arguments": {"action": "up"}
-                        }
+                        "id": "c7",
+                        "name": "manage_brightness",
+                        "arguments": json.dumps({"action": "up"})
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Brightness increased by 10%.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Increase brightness")
         mock_sbc.assert_called_with("+10")
@@ -600,64 +618,118 @@ class TestLLMToolCalling(unittest.TestCase):
         self.assertIn("Brightness increased by 10", reply)
 
     def test_volume_and_brightness_tool_schemas(self):
-        from src.tools.system_ctrl import TOOL_SCHEMAS
-        schemas_by_name = {s["function"]["name"]: s["function"] for s in TOOL_SCHEMAS}
-        vol_schema = schemas_by_name["manage_volume"]
-        bright_schema = schemas_by_name["manage_brightness"]
+        from src.tools.system_ctrl import (
+            TOOL_SCHEMAS,
+            VolumeSkill,
+            BrightnessSkill,
+            VOLUME_SKILL_MANIFEST,
+            BRIGHTNESS_SKILL_MANIFEST,
+            get_hardware_skills,
+        )
+        # Verify OpenJarvis Skill manifests follow agentskills.io schema
+        self.assertEqual(VOLUME_SKILL_MANIFEST.name, "manage-volume")
+        self.assertEqual(BRIGHTNESS_SKILL_MANIFEST.name, "manage-brightness")
+        self.assertEqual(VOLUME_SKILL_MANIFEST.version, "0.1.0")
+        self.assertEqual(BRIGHTNESS_SKILL_MANIFEST.version, "0.1.0")
+
+        vol_skill = VolumeSkill()
+        bright_skill = BrightnessSkill()
+        self.assertEqual(vol_skill.spec.name, "manage_volume")
+        self.assertEqual(bright_skill.spec.name, "manage_brightness")
+
+        # Check registered skills in orchestrator
+        registered_names = [t.spec.name for t in self.assistant.orchestrator._tools]
+        self.assertIn("manage_volume", registered_names)
+        self.assertIn("manage_brightness", registered_names)
+
+        # Check tool schemas
+        vol_schema = vol_skill.spec.parameters
+        bright_schema = bright_skill.spec.parameters
 
         # Ensure value is supported as an integer property
-        self.assertIn("value", vol_schema["parameters"]["properties"])
-        self.assertEqual(vol_schema["parameters"]["properties"]["value"]["type"], "integer")
-        self.assertIn("value", bright_schema["parameters"]["properties"])
-        self.assertEqual(bright_schema["parameters"]["properties"]["value"]["type"], "integer")
+        self.assertIn("value", vol_schema["properties"])
+        self.assertEqual(vol_schema["properties"]["value"]["type"], "integer")
+        self.assertIn("value", bright_schema["properties"])
+        self.assertEqual(bright_schema["properties"]["value"]["type"], "integer")
 
         # Check allowed action enums
-        self.assertEqual(vol_schema["parameters"]["properties"]["action"]["enum"], ["up", "down", "mute", "unmute", "set"])
-        self.assertEqual(bright_schema["parameters"]["properties"]["action"]["enum"], ["up", "down", "set"])
-        self.assertEqual(vol_schema["parameters"]["required"], ["action"])
-        self.assertEqual(bright_schema["parameters"]["required"], ["action"])
+        self.assertEqual(vol_schema["properties"]["action"]["enum"], ["up", "down", "mute", "unmute", "set"])
+        self.assertEqual(bright_schema["properties"]["action"]["enum"], ["up", "down", "set"])
+        self.assertEqual(vol_schema["required"], ["action"])
+        self.assertEqual(bright_schema["required"], ["action"])
 
-    @patch("ollama.chat")
-    def test_tool_calling_capture_screen(self, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_capture_screen(self):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "capture_screen",
-                            "arguments": {}
-                        }
+                        "id": "c8",
+                        "name": "capture_screen",
+                        "arguments": "{}"
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Screenshot captured successfully.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Take a screenshot")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("Screenshot captured successfully", reply)
 
-    @patch("ollama.chat")
-    def test_tool_calling_list_running_processes(self, mock_ollama_chat):
-        mock_ollama_chat.return_value = {
-            "message": {
-                "role": "assistant",
+    def test_tool_calling_list_running_processes(self):
+        self.assistant.orchestrator._generate = MagicMock(side_effect=[
+            {
                 "content": "",
                 "tool_calls": [
                     {
-                        "function": {
-                            "name": "list_running_processes",
-                            "arguments": {"limit": 5}
-                        }
+                        "id": "c9",
+                        "name": "list_running_processes",
+                        "arguments": json.dumps({"limit": 5})
                     }
                 ]
+            },
+            {
+                "content": "Certainly, sir. Here are the top processes by resource usage.",
+                "tool_calls": []
             }
-        }
+        ])
 
         reply = self.assistant.query_ollama("Check what processes are using CPU")
         self.assertIn("Certainly, sir", reply)
         self.assertIn("processes by resource usage", reply)
+
+    def test_openjarvis_skills_manifest_and_disk_discovery(self):
+        from openjarvis.skills.loader import discover_skills
+        discovered = discover_skills("skills")
+        names = [m.name for m in discovered]
+        self.assertIn("manage-volume", names)
+        self.assertIn("manage-brightness", names)
+
+    @patch("screen_brightness_control.set_brightness")
+    def test_openjarvis_brightness_skill_direct_execute(self, mock_sbc):
+        skill = BrightnessSkill()
+        result = skill.execute(action="up", value=15)
+        self.assertIsInstance(result, ToolResult)
+        self.assertTrue(result.success)
+        mock_sbc.assert_called_with("+15")
+
+    @patch("src.tools.system_ctrl.AudioUtilities.GetSpeakers")
+    def test_openjarvis_volume_skill_direct_execute(self, mock_get_speakers):
+        mock_volume = MagicMock()
+        mock_volume.GetMute.return_value = 0
+        mock_device = MagicMock()
+        mock_device.EndpointVolume = mock_volume
+        mock_get_speakers.return_value = mock_device
+
+        skill = VolumeSkill()
+        result = skill.execute(action="mute")
+        self.assertIsInstance(result, ToolResult)
+        self.assertTrue(result.success)
+        self.assertIn("muted", result.content.lower())
 
     def test_empty_prompt_handling(self):
         reply = self.assistant.query_ollama("   ")
@@ -738,12 +810,11 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         mock_listen.assert_called_once()
         mock_speak.assert_any_call("Shutting down. Have a wonderful day, sir.")
 
-    @patch("ollama.chat")
     @patch("main.Model")
     @patch("sounddevice.InputStream")
     @patch.object(VoiceAssistant, "speak")
     @patch.object(VoiceAssistant, "listen")
-    def test_run_jarvis_sentence_streaming(self, mock_listen, mock_speak, mock_stream, mock_model_cls, mock_ollama_chat):
+    def test_run_jarvis_sentence_streaming(self, mock_listen, mock_speak, mock_stream, mock_model_cls):
         mock_model_instance = MagicMock()
         mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
         mock_model_cls.return_value = mock_model_instance
@@ -754,23 +825,18 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
         mock_listen.side_effect = ["Tell me a joke", "goodbye"]
 
-        mock_ollama_chat.return_value = [
-            {"message": {"content": "Why did the robot cross the road? "}},
-            {"message": {"content": "To get to the other side! "}},
-            {"message": {"content": "Haha."}},
-        ]
+        s1 = "This is the first comprehensive sentence that explains the detailed answer to your initial inquiry, sir."
+        s2 = "Following up on that, here is the second comprehensive sentence providing further elaboration on the matter."
+        full_text = f"{s1} {s2}"
+        self.assistant.orchestrator.run = MagicMock(
+            return_value=AgentResult(content=full_text)
+        )
 
         run_jarvis(self.assistant)
 
-        mock_ollama_chat.assert_called_once_with(
-            model="jarvis",
-            messages=self.assistant.conversation_history,
-            stream=True,
-            keep_alive=-1,
-        )
-        mock_speak.assert_any_call("Why did the robot cross the road?")
-        mock_speak.assert_any_call("To get to the other side!")
-        mock_speak.assert_any_call("Haha.")
+        self.assistant.orchestrator.run.assert_called_once_with("Tell me a joke")
+        mock_speak.assert_any_call(s1)
+        mock_speak.assert_any_call(s2)
 
     @patch("main.Model")
     @patch("sounddevice.InputStream")
@@ -809,12 +875,11 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         mock_stop.assert_called()
         self.assertEqual(result, "Stop music")
 
-    @patch("ollama.chat")
-    def test_persistent_context_follow_up_turns(self, mock_ollama_chat):
-        mock_ollama_chat.side_effect = [
-            {"message": {"role": "assistant", "content": "I am Jarvis, sir."}},
-            {"message": {"role": "assistant", "content": "You asked for my identity, sir."}},
-        ]
+    def test_persistent_context_follow_up_turns(self):
+        self.assistant.orchestrator.run = MagicMock(side_effect=[
+            AgentResult(content="I am Jarvis, sir."),
+            AgentResult(content="You asked for my identity, sir."),
+        ])
 
         reply1 = self.assistant.query_ollama("Who are you?")
         self.assertEqual(reply1, "I am Jarvis, sir.")
@@ -828,13 +893,11 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         self.assertEqual(self.assistant.conversation_history[2]["content"], "What did I just ask?")
         self.assertEqual(self.assistant.conversation_history[3]["content"], "You asked for my identity, sir.")
 
-
     @patch("main.Model")
     @patch("sounddevice.InputStream")
     @patch.object(VoiceAssistant, "speak")
     @patch.object(VoiceAssistant, "listen")
-    @patch("ollama.chat")
-    def test_run_jarvis_follow_up_listening_on_question(self, mock_ollama_chat, mock_listen, mock_speak, mock_stream, mock_model_cls):
+    def test_run_jarvis_follow_up_listening_on_question(self, mock_listen, mock_speak, mock_stream, mock_model_cls):
         mock_model_instance = MagicMock()
         mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
         mock_model_cls.return_value = mock_model_instance
@@ -845,9 +908,9 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
 
         # First query ends in '?', triggering follow-up without wake word
         mock_listen.side_effect = ["Need info", "goodbye"]
-        mock_ollama_chat.return_value = [
-            {"message": {"content": "What details would you like to know?"}}
-        ]
+        self.assistant.orchestrator.run = MagicMock(
+            return_value=AgentResult(content="What details would you like to know?")
+        )
 
         run_jarvis(self.assistant)
         self.assertEqual(mock_listen.call_count, 2)
@@ -857,8 +920,7 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
     @patch("sounddevice.InputStream")
     @patch.object(VoiceAssistant, "speak")
     @patch.object(VoiceAssistant, "listen")
-    @patch("ollama.chat")
-    def test_run_jarvis_follow_up_dismissal(self, mock_ollama_chat, mock_listen, mock_speak, mock_stream, mock_model_cls):
+    def test_run_jarvis_follow_up_dismissal(self, mock_listen, mock_speak, mock_stream, mock_model_cls):
         mock_model_instance = MagicMock()
         mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
         mock_model_cls.return_value = mock_model_instance
@@ -870,9 +932,9 @@ class TestAudioPipelineAndEdgeCases(unittest.TestCase):
         # 1st query asks question -> follow-up triggered -> user says "no thanks" -> Jarvis says "Very well, sir. Standing by."
         # Next wake word -> "goodbye" -> exits
         mock_listen.side_effect = ["Need info", "no thanks", "goodbye"]
-        mock_ollama_chat.return_value = [
-            {"message": {"content": "Can I help with anything else?"}}
-        ]
+        self.assistant.orchestrator.run = MagicMock(
+            return_value=AgentResult(content="Can I help with anything else?")
+        )
 
         run_jarvis(self.assistant)
         self.assertEqual(mock_listen.call_count, 3)
@@ -1120,9 +1182,9 @@ class TestHardwareIntentBypass(unittest.TestCase):
     @patch("sounddevice.InputStream")
     @patch.object(VoiceAssistant, "speak")
     @patch.object(VoiceAssistant, "listen")
-    @patch("ollama.chat")
-    def test_run_jarvis_native_hardware_interceptor_skips_ollama(self, mock_ollama_chat, mock_listen, mock_speak, mock_stream, mock_model_cls, mock_vol):
+    def test_run_jarvis_native_hardware_interceptor_skips_ollama(self, mock_listen, mock_speak, mock_stream, mock_model_cls, mock_vol):
         assistant = VoiceAssistant()
+        assistant.orchestrator.run = MagicMock()
         mock_model_instance = MagicMock()
         mock_model_instance.predict.return_value = {"hey_jarvis": 0.85}
         mock_model_cls.return_value = mock_model_instance
@@ -1139,7 +1201,7 @@ class TestHardwareIntentBypass(unittest.TestCase):
 
         mock_vol.assert_called_with("up")
         mock_speak.assert_any_call("Volume increased.")
-        mock_ollama_chat.assert_not_called()
+        assistant.orchestrator.run.assert_not_called()
 
 
 if __name__ == "__main__":

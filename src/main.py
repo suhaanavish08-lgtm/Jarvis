@@ -8,7 +8,7 @@ import re
 import sys
 import threading
 import time
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any, Dict
 
 try:
     import overlay
@@ -23,32 +23,55 @@ import scipy.io.wavfile as wav
 import sounddevice as sd
 import soundfile as sf
 
-try:
-    import ollama
-except ImportError:
-    ollama = None
-
 from openwakeword.model import Model
+from openjarvis.agents.orchestrator import OrchestratorAgent
+from openjarvis.agents import orchestrator
+from openjarvis.engine.ollama import OllamaEngine
+from openjarvis.core.config import load_config
+from openjarvis.engine import get_engine
+from openjarvis.tools import BaseTool
 
 # Initialize Faster-Whisper model on CPU with int8 quantization
 stt_model = WhisperModel("small.en", device="cpu", compute_type="int8")
 
-
-from tools.system_ctrl import (
-    handle_system_command,
-    get_system_stats,
-    launch_app,
-    open_application,
-    control_spotify,
-    is_spotify_running,
-    run_powershell_command,
-    search_web,
-    manage_volume,
-    manage_brightness,
-    capture_screen,
-    list_running_processes,
-    TOOL_SCHEMAS,
-)
+try:
+    from tools.system_ctrl import (
+        handle_system_command,
+        get_system_stats,
+        launch_app,
+        open_application,
+        control_spotify,
+        is_spotify_running,
+        run_powershell_command,
+        search_web,
+        manage_volume,
+        manage_brightness,
+        capture_screen,
+        list_running_processes,
+        VolumeSkill,
+        BrightnessSkill,
+        get_hardware_skills,
+        get_openjarvis_tools,
+    )
+except ImportError:
+    from src.tools.system_ctrl import (
+        handle_system_command,
+        get_system_stats,
+        launch_app,
+        open_application,
+        control_spotify,
+        is_spotify_running,
+        run_powershell_command,
+        search_web,
+        manage_volume,
+        manage_brightness,
+        capture_screen,
+        list_running_processes,
+        VolumeSkill,
+        BrightnessSkill,
+        get_hardware_skills,
+        get_openjarvis_tools,
+    )
 
 # Configuration for Kokoro TTS (v1.0 model & voices-v1.0.bin)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -509,13 +532,75 @@ JARVIS_SYSTEM_PROMPT = (
 )
 
 
+class JarvisOrchestrator(OrchestratorAgent):
+    """OpenJarvis Orchestrator agent extended with skill registration."""
+
+    def register_skill(self, skill: BaseTool):
+        """Register an OpenJarvis skill or tool with the orchestrator."""
+        if not hasattr(self, "_tools") or self._tools is None:
+            self._tools = []
+        replaced = False
+        for idx, t in enumerate(self._tools):
+            if hasattr(t, "spec") and t.spec.name == skill.spec.name:
+                self._tools[idx] = skill
+                replaced = True
+                break
+        if not replaced:
+            self._tools.append(skill)
+        if hasattr(self, "_executor") and hasattr(self._executor, "_tools"):
+            self._executor._tools[skill.spec.name] = skill
+
+    def register_tool(self, tool: BaseTool):
+        """Alias for register_skill."""
+        self.register_skill(tool)
+
+
+def create_orchestrator(
+    model_name: str = "jarvis",
+    system_prompt: str = JARVIS_SYSTEM_PROMPT,
+    engine: Optional[Any] = None,
+) -> JarvisOrchestrator:
+    """Instantiate and configure the OpenJarvis orchestrator with hardware and system skills."""
+    if engine is None:
+        try:
+            cfg = load_config()
+            engine_tuple = get_engine(cfg, engine_key="ollama")
+            engine = engine_tuple[1] if engine_tuple else OllamaEngine()
+        except Exception:
+            engine = OllamaEngine()
+
+    all_tools = get_openjarvis_tools()
+    agent = JarvisOrchestrator(
+        engine=engine,
+        model=model_name,
+        tools=all_tools,
+        system_prompt=system_prompt,
+    )
+
+    # Register hardware skills conforming to agentskills.io schema with orchestrator instance
+    for skill in get_hardware_skills():
+        agent.register_skill(skill)
+
+    return agent
+
+
 class VoiceAssistant:
-    def __init__(self, model_name: str = "jarvis", voice: str = CHOSEN_VOICE, **kwargs):
+    def __init__(
+        self,
+        model_name: str = "jarvis",
+        voice: str = CHOSEN_VOICE,
+        orchestrator_agent: Optional[Any] = None,
+        **kwargs,
+    ):
         self.model_name = model_name
         self.voice = voice
         self.conversation_history = []
         self.messages = self.conversation_history
         self._transcriber = stt_model
+        if orchestrator_agent is not None:
+            self.orchestrator = orchestrator_agent
+        else:
+            self.orchestrator = create_orchestrator(model_name=self.model_name)
 
     @property
     def transcriber(self):
@@ -533,12 +618,8 @@ class VoiceAssistant:
     ) -> Optional[str]:
         return listen(timeout=timeout, max_silent_time=max_silent_time, **kwargs)
 
-    def query_ollama(self, user_prompt: str) -> str:
-        """Send prompt to Ollama running the local jarvis model with safe tool calling support."""
-        if not ollama:
-            print("[Debug Error]: Ollama library is not installed in the environment.")
-            return "I encountered an error, sir."
-
+    def query_orchestrator(self, user_prompt: str) -> str:
+        """Route transcribed audio text directly into the OpenJarvis orchestrator agent for reasoning and response generation."""
         clean_prompt = user_prompt.strip()
         if not clean_prompt:
             return "Awaiting your command, sir."
@@ -546,83 +627,27 @@ class VoiceAssistant:
         self.conversation_history.append({"role": "user", "content": clean_prompt})
 
         try:
-            messages_to_send = [{"role": "system", "content": JARVIS_SYSTEM_PROMPT}] + self.conversation_history[-8:]
-            response = ollama.chat(
-                model=self.model_name,
-                messages=messages_to_send,
-                tools=TOOL_SCHEMAS,
-            )
-            message = response.get("message", {})
-            tool_calls = message.get("tool_calls")
-            if tool_calls:
-                tool_replies = []
-                for tool in tool_calls:
-                    fn_info = tool.get("function", {})
-                    fn_name = fn_info.get("name")
-                    fn_args = fn_info.get("arguments", {})
-                    if isinstance(fn_args, str):
-                        try:
-                            fn_args = json.loads(fn_args)
-                        except Exception as e:
-                            print(f"[Debug Error - Tool Args]: {e}")
-                            fn_args = {}
-
-                    if fn_name == "control_spotify":
-                        _, msg = control_spotify(action=fn_args.get("action", ""), query=fn_args.get("query", ""))
-                        tool_replies.append(msg)
-                    elif fn_name == "open_application":
-                        _, msg = open_application(app_name=fn_args.get("app_name", ""))
-                        tool_replies.append(msg)
-                    elif fn_name == "get_system_stats":
-                        stats = get_system_stats()
-                        tool_replies.append(stats["summary"])
-                    elif fn_name == "run_powershell_command":
-                        cmd_out = run_powershell_command(command=fn_args.get("command", ""))
-                        tool_replies.append(cmd_out)
-                    elif fn_name == "search_web":
-                        search_out = search_web(query=fn_args.get("query", ""), max_results=int(fn_args.get("max_results", 3)))
-                        tool_replies.append(search_out)
-                    elif fn_name == "manage_volume":
-                        vol_out = manage_volume(action=fn_args.get("action", "mute"), value=fn_args.get("value"))
-                        tool_replies.append(vol_out)
-                    elif fn_name == "manage_brightness":
-                        bright_out = manage_brightness(action=fn_args.get("action", "up"), value=fn_args.get("value"))
-                        tool_replies.append(bright_out)
-                    elif fn_name == "capture_screen":
-                        screen_out = capture_screen()
-                        tool_replies.append(screen_out)
-                    elif fn_name == "list_running_processes":
-                        procs_out = list_running_processes(limit=int(fn_args.get("limit", 10)))
-                        tool_replies.append(procs_out)
-                    else:
-                        tool_replies.append(f"Function {fn_name} is not recognized.")
-
-                tool_text = " ".join(tool_replies) if tool_replies else message.get("content", "").strip()
-                # Feed tool execution result into conversation history with polite persona
-                reply = f"Certainly, sir. {tool_text}" if tool_text else "Task completed as requested, sir."
+            result = self.orchestrator.run(clean_prompt)
+            if hasattr(result, "content"):
+                reply = result.content.strip()
+            elif isinstance(result, dict):
+                reply = result.get("content", "").strip()
             else:
-                reply = message.get("content", "").strip()
-                if not reply:
-                    reply = "At your command, sir."
+                reply = str(result).strip()
+
+            if not reply:
+                reply = "At your command, sir."
 
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
         except Exception as exc:
-            print(f"[Debug Error - Ollama Tool Chat]: {exc}")
-            # Fallback to direct chat without tools
-            try:
-                response = ollama.chat(
-                    model=self.model_name,
-                    messages=self.conversation_history[-8:],
-                )
-                reply = response.get("message", {}).get("content", "").strip()
-                if not reply:
-                    reply = "At your service, sir."
-                self.conversation_history.append({"role": "assistant", "content": reply})
-                return reply
-            except Exception as e:
-                print(f"[Debug Error - Ollama Direct Chat]: {e}")
-                return "I encountered an error, sir."
+            print(f"[Orchestrator Error]: {exc}")
+            err_msg = "I encountered an error, sir."
+            self.conversation_history.append({"role": "assistant", "content": err_msg})
+            return err_msg
+
+    # Backwards compatibility alias
+    query_ollama = query_orchestrator
 
     def process_input(self, user_text: Optional[str]) -> bool:
         """Process transcribed or typed input. Returns False if user requested exit."""
@@ -637,7 +662,7 @@ class VoiceAssistant:
             self.speak("Shutting down. Have a wonderful day, sir.")
             return False
 
-        # Instant Hardware Interceptors
+        # Instant Hardware Interceptors (bypass LLM latency)
         if "increase volume" in lower_text or "volume up" in lower_text:
             manage_volume("up")
             self.speak("Volume increased.")
@@ -670,8 +695,8 @@ class VoiceAssistant:
             self.speak(system_reply)
             return True
 
-        # Otherwise query the Ollama model and speak out loud
-        reply = self.query_ollama(clean_text)
+        # Otherwise route directly into OpenJarvis orchestrator agent and speak out loud
+        reply = self.query_orchestrator(clean_text)
         if reply and reply.strip():
             self.speak(reply)
         return True
@@ -894,42 +919,15 @@ def run_jarvis(assistant: Optional[VoiceAssistant] = None):
                             assistant.speak(system_reply)
                             jarvis_response = system_reply
                         else:
-                            messages.append({"role": "user", "content": clean_text})
-                            try:
-                                response = ollama.chat(model="jarvis", messages=messages, stream=True, keep_alive=-1)
-                                current_sentence = ""
-                                full_reply = ""
-                                for chunk in response:
-                                    try:
-                                        content = chunk["message"]["content"]
-                                    except Exception:
-                                        content = getattr(getattr(chunk, "message", None), "content", "")
-                                    if not content:
-                                        continue
-                                    current_sentence += content
-                                    full_reply += content
-
-                                    while True:
-                                        match = re.search(r"([.?!])\s+", current_sentence)
-                                        if not match:
-                                            break
-                                        end_pos = match.end()
-                                        sentence = current_sentence[:end_pos].strip()
-                                        current_sentence = current_sentence[end_pos:]
-                                        if sentence:
-                                            assistant.speak(sentence)
-
-                                if current_sentence.strip():
-                                    assistant.speak(current_sentence.strip())
-
-                                if full_reply.strip():
-                                    messages.append({"role": "assistant", "content": full_reply.strip()})
-                                jarvis_response = full_reply.strip()
-                            except Exception as exc:
-                                print(f"[Ollama Error]: {exc}")
-                                err_msg = "I encountered an error, sir."
-                                assistant.speak(err_msg)
-                                jarvis_response = err_msg
+                            # Route transcribed audio text directly into OpenJarvis orchestrator for reasoning and response generation
+                            reply = assistant.query_orchestrator(clean_text)
+                            if reply and reply.strip():
+                                chunks = chunk_text(reply)
+                                for c in chunks:
+                                    assistant.speak(c)
+                                jarvis_response = reply
+                            else:
+                                jarvis_response = ""
 
                 # Follow-up check: If Jarvis's response contains questions or follow-up prompts
                 resp_lower = jarvis_response.lower() if jarvis_response else ""
